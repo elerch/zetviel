@@ -14,8 +14,12 @@ jobs:
         with:
           version: 0.12.0
       - uses: elerch/zig-action-cache@v1.1.6
-      - name: Install dependencies
+      - name: Install dependencies (gitea)
+        if: env.GITEA_ACTIONS == 'true'
         run: apt-get update && apt-get install --no-install-recommends -y libnotmuch-dev
+      - name: Install dependencies (github)
+        if: env.GITEA_ACTIONS != 'true'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libnotmuch-dev
       - name: Build project
         run: zig build --summary all
       - name: Run tests
