@@ -112,36 +112,34 @@ fn configure(compile: *std.Build.Step.Compile, paths: std.zig.system.NativePaths
 }
 
 fn checkNix(b: *std.Build, target_query: *std.Target.Query) !std.zig.system.NativePaths {
-    // All linux-specific stuff should be in here
-    if (@import("builtin").os.tag != .linux or !(target_query.os_tag == null or target_query.os_tag.? == .linux)) {
-        std.log.err("Only linux host and target builds supported right now", .{});
-        return error.NotImplemented;
-    }
-    // Capture the natively detected paths for potential future use
     const native_result = b.resolveTargetQuery(target_query.*);
     const paths = try std.zig.system.NativePaths.detect(b.allocator, native_result.result);
-    const nix_develop_bintools = std.posix.getenv("NIX_BINTOOLS");
-    if (nix_develop_bintools) |bintools| {
-        // std.debug.print("\nDetected nix bintools\n", .{});
-        // We'll capture the interpreter used in $NIX_BINTOOLS/bin/size
-        // We expect this to be a symlink to a native elf executable
-        // readlink $NIX_BINTOOLS/bin/size
-        var pathbuf: [std.posix.PATH_MAX]u8 = undefined;
-        const elf_path = try std.posix.readlink(
-            try std.fs.path.join(b.allocator, &[_][]const u8{
-                bintools,
-                "bin",
-                "size",
-            }),
-            &pathbuf,
-        );
 
-        // Setting the dynamic linker (necessary to avoid dll hell) will put
-        // zig into a non-native mode, and will therefore ignore all the native
-        // paths. We'll put these back from the values captured above in
-        // our configure function
-        target_query.dynamic_linker = try getDynamicLinker(elf_path);
-    }
+    // If we are not using nix, we can build anywhere provided the system dependencies exist
+    if (!std.process.hasEnvVarConstant("NIX_BINTOOLS")) return paths;
+
+    // Capture the natively detected paths for potential future use
+    const bintools = try std.process.getEnvVarOwned(b.allocator, "NIX_BINTOOLS");
+
+    // We'll capture the interpreter used in $NIX_BINTOOLS/bin/size
+    // We expect this to be a symlink to a native elf executable
+    // readlink $NIX_BINTOOLS/bin/size
+    var pathbuf: [std.posix.PATH_MAX]u8 = undefined;
+    // posix.readlink is supported on all OSs
+    const elf_path = try std.posix.readlink(
+        try std.fs.path.join(b.allocator, &[_][]const u8{
+            bintools,
+            "bin",
+            "size",
+        }),
+        &pathbuf,
+    );
+
+    // Setting the dynamic linker (necessary to avoid dll hell) will put
+    // zig into a non-native mode, and will therefore ignore all the native
+    // paths. We'll put these back from the values captured above in
+    // our configure function
+    target_query.dynamic_linker = try getDynamicLinker(elf_path);
     return paths;
 }
 fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
