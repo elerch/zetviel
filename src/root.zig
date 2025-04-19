@@ -3,13 +3,32 @@ const notmuch = @import("notmuch.zig");
 
 // Thread representation for JSON serialization
 pub const Thread = struct {
+    allocator: std.mem.Allocator,
     thread: *notmuch.Db.Thread,
 
-    pub fn init(t: *notmuch.Db.Thread) Thread {
-        return .{ .thread = t };
+    pub fn init(allocator: std.mem.Allocator, t: *notmuch.Db.Thread) Thread {
+        return .{ .allocator = allocator, .thread = t };
+    }
+    pub fn deinit(self: Thread) void {
+        self.allocator.destroy(self.thread);
     }
 
     pub fn jsonStringify(self: Thread, jws: anytype) !void {
+        // Format we're looking for on api/thread/<threadid>
+        //[
+        //  {
+        //    "from": "The Washington Post <email@washingtonpost.com>",
+        //    "to": "elerch@lerch.org",
+        //    "cc": null,
+        //    "bcc": null,
+        //    "date": "Sun, 21 Jul 2024 19:23:38 +0000",
+        //    "subject": "Biden steps aside",
+        //    "content": "...content...",
+        //    "content_type": "text/html",
+        //    "attachments": [],
+        //    "message_id": "01010190d6bfe4e1-185e2720-e415-4086-8865-9604cde886c2-000000@us-west-2.amazonses.com"
+        //  }
+        //]
         try jws.beginArray();
         var mi = self.thread.getMessages() catch return error.OutOfMemory;
         while (mi.next()) |m| {
@@ -43,29 +62,73 @@ pub const Thread = struct {
 
 // Threads collection for JSON serialization
 pub const Threads = struct {
+    allocator: std.mem.Allocator,
     iterator: *notmuch.Db.ThreadIterator,
 
-    pub fn init(it: *notmuch.Db.ThreadIterator) Threads {
+    pub fn init(allocator: std.mem.Allocator, it: *notmuch.Db.ThreadIterator) Threads {
         return .{
+            .allocator = allocator,
             .iterator = it,
         };
     }
 
+    pub fn deinit(self: *Threads) void {
+        self.iterator.deinit();
+        self.allocator.destroy(self.iterator);
+    }
+
+    pub fn next(self: *Threads) !?Thread {
+        const nxt = self.iterator.next();
+        if (nxt) |_| {
+            const tptr = try self.allocator.create(notmuch.Db.Thread);
+            tptr.* = nxt.?;
+            return Thread.init(self.allocator, tptr);
+        }
+        return null;
+    }
+
     pub fn jsonStringify(self: Threads, jws: anytype) !void {
-        //[
-        //  {
-        //    "from": "The Washington Post <email@washingtonpost.com>",
-        //    "to": "elerch@lerch.org",
-        //    "cc": null,
-        //    "bcc": null,
-        //    "date": "Sun, 21 Jul 2024 19:23:38 +0000",
-        //    "subject": "Biden steps aside",
-        //    "content": "...content...",
-        //    "content_type": "text/html",
-        //    "attachments": [],
-        //    "message_id": "01010190d6bfe4e1-185e2720-e415-4086-8865-9604cde886c2-000000@us-west-2.amazonses.com"
-        //  }
-        //]
+        // This is the json we're looking to match on api/query/<term>
+        // [
+        //    {
+        //      "authors": "The Washington Post",
+        //      "matched_messages": 1,
+        //      "newest_date": 1721664948,
+        //      "oldest_date": 1721664948,
+        //      "subject": "Biden is out. What now?",
+        //      "tags": [
+        //        "inbox",
+        //        "unread"
+        //      ],
+        //      "thread_id": "0000000000031723",
+        //      "total_messages": 1
+        //    },
+        //    {
+        //      "authors": "The Washington Post",
+        //      "matched_messages": 1,
+        //      "newest_date": 1721603115,
+        //      "oldest_date": 1721603115,
+        //      "subject": "Upcoming Virtual Programs",
+        //      "tags": [
+        //        "inbox",
+        //        "unread"
+        //      ],
+        //      "thread_id": "0000000000031712",
+        //      "total_messages": 1
+        //    },
+        //    {
+        //      "authors": "The Washington Post",
+        //      "matched_messages": 1,
+        //      "newest_date": 1721590157,
+        //      "oldest_date": 1721590157,
+        //      "subject": "Biden Steps Aside",
+        //      "tags": [
+        //        "inbox"
+        //      ],
+        //      "thread_id": "000000000003170d",
+        //      "total_messages": 1
+        //    }
+        // ]
         try jws.beginArray();
         while (self.iterator.next()) |t| {
             defer t.deinit();
@@ -105,11 +168,12 @@ pub const NotmuchDb = struct {
         self.allocator.free(self.path);
     }
 
-    pub fn searchThreads(self: *NotmuchDb, query: []const u8) !Threads {
+    pub fn search(self: *NotmuchDb, query: []const u8) !Threads {
         var query_buf: [1024:0]u8 = undefined;
         const query_z = try std.fmt.bufPrintZ(&query_buf, "{s}", .{query});
-        var thread_iter = try self.db.searchThreads(query_z);
-        return Threads.init(&thread_iter);
+        const ti = try self.allocator.create(notmuch.Db.ThreadIterator);
+        ti.* = try self.db.searchThreads(query_z);
+        return Threads.init(self.allocator, ti);
     }
 
     pub fn getThread(self: *NotmuchDb, thread_id: []const u8) !Thread {
@@ -118,8 +182,12 @@ pub const NotmuchDb = struct {
         var thread_iter = try self.db.searchThreads(query_z);
         defer thread_iter.deinit();
 
-        var thread = thread_iter.next();
-        if (thread) |_| return Thread.init(&thread.?);
+        const thread = thread_iter.next();
+        if (thread) |t| {
+            const tptr = try self.allocator.create(notmuch.Db.Thread);
+            tptr.* = t;
+            return Thread.init(self.allocator, tptr);
+        }
         return error.ThreadNotFound;
     }
 };
@@ -147,65 +215,6 @@ test "open database with public api" {
     defer db.close();
 }
 
-// This is the json we're looking to match on api/query/<term>
-// [
-//    {
-//      "authors": "The Washington Post",
-//      "matched_messages": 1,
-//      "newest_date": 1721664948,
-//      "oldest_date": 1721664948,
-//      "subject": "Biden is out. What now?",
-//      "tags": [
-//        "inbox",
-//        "unread"
-//      ],
-//      "thread_id": "0000000000031723",
-//      "total_messages": 1
-//    },
-//    {
-//      "authors": "The Washington Post",
-//      "matched_messages": 1,
-//      "newest_date": 1721603115,
-//      "oldest_date": 1721603115,
-//      "subject": "Upcoming Virtual Programs",
-//      "tags": [
-//        "inbox",
-//        "unread"
-//      ],
-//      "thread_id": "0000000000031712",
-//      "total_messages": 1
-//    },
-//    {
-//      "authors": "The Washington Post",
-//      "matched_messages": 1,
-//      "newest_date": 1721590157,
-//      "oldest_date": 1721590157,
-//      "subject": "Biden Steps Aside",
-//      "tags": [
-//        "inbox"
-//      ],
-//      "thread_id": "000000000003170d",
-//      "total_messages": 1
-//    }
-// ]
-//
-// And on api/thread/<threadid>
-//
-// [
-//   {
-//     "from": "The Washington Post <email@washingtonpost.com>",
-//     "to": "elerch@lerch.org",
-//     "cc": null,
-//     "bcc": null,
-//     "date": "Sun, 21 Jul 2024 19:23:38 +0000",
-//     "subject": "Biden steps aside",
-//     "content": "...content...",
-//     "content_type": "text/html",
-//     "attachments": [],
-//     "message_id": "01010190d6bfe4e1-185e2720-e415-4086-8865-9604cde886c2-000000@us-west-2.amazonses.com"
-//   }
-// ]
-
 test "can stringify general queries" {
     const allocator = std.testing.allocator;
     // const db_path = try std.fs.path.join(
@@ -213,87 +222,58 @@ test "can stringify general queries" {
     //     std.fs.cwd(),
     //     "mail",
     // );
-
-    // Current directory under test is root of project
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
-    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(path_buf[0..]);
-    const db_path = try std.fs.path.joinZ(fba.allocator(), &[_][]const u8{ cwd, "mail" });
-    {
-        var status: notmuch.Status = undefined;
-        var db = try notmuch.Db.open(db_path, &status);
-        defer db.deinit();
-        defer db.close();
-        defer status.deinit();
-        var al = std.ArrayList(u8).init(allocator);
-        defer al.deinit();
-        var ti = try db.searchThreads("Tablets");
-        defer ti.deinit();
-        try std.json.stringify(Threads.init(&ti), .{ .whitespace = .indent_2 }, al.writer());
-        const actual = al.items;
-        try std.testing.expectEqualStrings(
-            \\[
-            \\  {
-            \\    "authors": "Top Medications",
-            \\    "matched_messages": 1,
-            \\    "newest_date": 1721484138,
-            \\    "oldest_date": 1721484138,
-            \\    "subject": "***SPAM*** Tablets without a prescription",
-            \\    "tags": [
-            \\      "inbox"
-            \\    ],
-            \\    "thread_id": "0000000000000001",
-            \\    "total_messages": 1
-            \\  }
-            \\]
-        , actual);
-    }
+    var db = try openNotmuchDb(allocator, "mail");
+    defer db.close();
+    var threads = try db.search("Tablets");
+    defer threads.deinit();
+    const actual = try std.json.stringifyAlloc(allocator, threads, .{ .whitespace = .indent_2 });
+    defer allocator.free(actual);
+    try std.testing.expectEqualStrings(
+        \\[
+        \\  {
+        \\    "authors": "Top Medications",
+        \\    "matched_messages": 1,
+        \\    "newest_date": 1721484138,
+        \\    "oldest_date": 1721484138,
+        \\    "subject": "***SPAM*** Tablets without a prescription",
+        \\    "tags": [
+        \\      "inbox"
+        \\    ],
+        \\    "thread_id": "0000000000000001",
+        \\    "total_messages": 1
+        \\  }
+        \\]
+    , actual);
 }
 
 test "can stringify specific threads" {
-    if (true) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    // const db_path = try std.fs.path.join(
-    //     allocator,
-    //     std.fs.cwd(),
-    //     "mail",
-    // );
 
-    // Current directory under test is root of project
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
-    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(path_buf[0..]);
-    const db_path = try std.fs.path.joinZ(fba.allocator(), &[_][]const u8{ cwd, "mail" });
-    {
-        var status: notmuch.Status = undefined;
-        var db = try notmuch.Db.open(db_path, &status);
-        defer db.deinit();
-        defer db.close();
-        defer status.deinit();
-        var al = std.ArrayList(u8).init(allocator);
-        defer al.deinit();
-        var ti = try db.searchThreads("Tablets");
-        defer ti.deinit();
-        var t = ti.next().?;
-        try std.json.stringify(Thread.init(&t), .{ .whitespace = .indent_2 }, al.writer());
-        const actual = al.items;
-        try std.testing.expectEqualStrings(
-            \\[
-            \\  {
-            \\    "from": "Top Medications <mail@youpharm.co>",
-            \\    "to": "emil@lerch.org",
-            \\    "cc": null,
-            \\    "bcc": null,
-            \\    "date": "Sat, 20 Jul 2024 16:02:18 +0200",
-            \\    "subject": "***SPAM*** Tablets without a prescription",
-            \\    "content": "...content...",
-            \\    "content_type": "text/html",
-            \\    "attachments": [],
-            \\    "message_id": "01010190d6bfe4e1-185e2720-e415-4086-8865-9604cde886c2-000000@us-west-2.amazonses.com"
-            \\  }
-            \\]
-        , actual);
-    }
+    var db = try openNotmuchDb(allocator, "mail");
+    defer db.close();
+    var threads = try db.search("Tablets");
+    defer threads.deinit();
+
+    var maybe_first_thread = try threads.next();
+    defer if (maybe_first_thread) |*t| t.deinit();
+    try std.testing.expect(maybe_first_thread != null);
+    const first_thread = maybe_first_thread.?;
+    const actual = try std.json.stringifyAlloc(allocator, first_thread, .{ .whitespace = .indent_2 });
+    defer allocator.free(actual);
+    try std.testing.expectEqualStrings(
+        \\[
+        \\  {
+        \\    "from": "Top Medications <mail@youpharm.co>",
+        \\    "to": "emil@lerch.org",
+        \\    "cc": null,
+        \\    "bcc": null,
+        \\    "date": "Sat, 20 Jul 2024 16:02:18 +0200",
+        \\    "subject": "***SPAM*** Tablets without a prescription",
+        \\    "content": "...content...",
+        \\    "content_type": "text/html",
+        \\    "attachments": [],
+        \\    "message_id": "01010190d6bfe4e1-185e2720-e415-4086-8865-9604cde886c2-000000@us-west-2.amazonses.com"
+        \\  }
+        \\]
+    , actual);
 }
