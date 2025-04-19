@@ -294,3 +294,76 @@ pub const Db = struct {
         }
     };
 };
+
+test "can get status" {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(path_buf[0..]);
+    const db_path = try std.fs.path.joinZ(fba.allocator(), &[_][]const u8{ cwd, "mail" });
+    {
+        var status: Status = undefined;
+        var db = try Db.open(db_path, &status);
+        defer db.deinit();
+        defer db.close();
+        defer status.deinit();
+        try std.testing.expectEqualStrings("No error occurred", status.statusString());
+    }
+    {
+        var db = try Db.open(db_path, null);
+        defer db.deinit();
+        defer db.close();
+    }
+    {
+        var status: Status = undefined;
+        try std.testing.expectError(error.CouldNotOpenDatabase, Db.open(
+            "NON-EXISTANT",
+            &status,
+        ));
+        defer status.deinit();
+        try std.testing.expectEqualStrings(
+            "Path supplied is illegal for this function",
+            status.statusString(),
+        );
+    }
+}
+
+test "can search threads" {
+    // const allocator = std.testing.allocator;
+    // const db_path = try std.fs.path.join(
+    //     allocator,
+    //     std.fs.cwd(),
+    //     "mail",
+    // );
+
+    // Current directory under test is root of project
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(path_buf[0..]);
+    const db_path = try std.fs.path.joinZ(fba.allocator(), &[_][]const u8{ cwd, "mail" });
+    {
+        var status: Status = undefined;
+        var db = try Db.open(db_path, &status);
+        defer db.deinit();
+        defer db.close();
+        defer status.deinit();
+        try std.testing.expectEqualStrings("No error occurred", status.statusString());
+        var t_iter = try db.searchThreads("Tablets");
+        defer t_iter.deinit();
+        var inx: usize = 0;
+        while (t_iter.next()) |t| : (inx += 1) {
+            defer t.deinit();
+            try std.testing.expectEqual(@as(c_int, 1), t.getTotalMessages());
+            try std.testing.expectEqualStrings("0000000000000001", t.getThreadId());
+            var message_iter = try t.getMessages();
+            var jnx: usize = 0;
+            while (message_iter.next()) |m| : (jnx += 1) {
+                defer m.deinit();
+                try std.testing.expectStringEndsWith(m.getFilename(), "/1721591945.R4187135327503631514.nucman:2,S");
+            }
+            try std.testing.expectEqual(@as(usize, 1), jnx);
+        }
+        try std.testing.expectEqual(@as(usize, 1), inx);
+    }
+}

@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    configure(exe, paths, reload_discovered_native_paths);
+    configure(lib_unit_tests, paths, reload_discovered_native_paths);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
