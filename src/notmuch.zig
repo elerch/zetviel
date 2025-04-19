@@ -1,3 +1,30 @@
+//! Zig bindings for the notmuch email indexing library.
+//!
+//! This module provides a safe Zig interface to the notmuch C library,
+//! allowing for searching, tagging, and managing email messages indexed
+//! by notmuch.
+//!
+//! Main components:
+//! - `Db`: Database access and query operations
+//! - `Thread`: Email thread representation
+//! - `Message`: Individual email message access
+//! - `Status`: Error handling and status reporting
+//!
+//! Example usage:
+//! ```
+//! var status: Status = undefined;
+//! var db = try Db.open("/path/to/maildir", &status);
+//! defer db.close();
+//!
+//! var threads = try db.searchThreads("from:example.com");
+//! defer threads.deinit();
+//!
+//! while (threads.next()) |thread| {
+//!     defer thread.deinit();
+//!     std.debug.print("Thread: {s}\n", .{thread.getSubject()});
+//! }
+//! ```
+
 const std = @import("std");
 const c = @cImport({
     @cInclude("notmuch.h");
@@ -107,10 +134,38 @@ pub const Db = struct {
             .thread_state = threads orelse return error.CouldNotSearchThreads,
         };
     }
+    pub const TagsIterator = struct {
+        tags_state: *c.notmuch_tags_t,
+        first: bool = true,
+
+        pub fn next(self: *TagsIterator) ?[]const u8 {
+            if (!self.first) c.notmuch_tags_move_to_next(self.tags_state);
+            self.first = false;
+            if (c.notmuch_tags_valid(self.tags_state) == 0) return null;
+            return std.mem.span(c.notmuch_tags_get(self.tags_state));
+        }
+
+        pub fn jsonStringify(self: *TagsIterator, jws: anytype) !void {
+            try jws.beginArray();
+            while (self.next()) |t| try jws.write(t);
+            try jws.endArray();
+        }
+        // Docs imply strongly not to bother with deinitialization here
+
+    };
 
     pub const Message = struct {
         message_handle: *c.notmuch_message_t,
 
+        pub fn getHeader(self: Message, header: [:0]const u8) !?[]const u8 {
+            const val = c.notmuch_message_get_header(self.message_handle, header) orelse return error.ErrorGettingHeader; // null is an error
+            const ziggy_val = std.mem.span(val);
+            if (ziggy_val.len == 0) return null; // empty string indicates message does not contain the header
+            return ziggy_val;
+        }
+        pub fn getMessageId(self: Message) []const u8 {
+            return std.mem.span(c.notmuch_message_get_message_id(self.message_handle));
+        }
         pub fn getFilename(self: Message) []const u8 {
             return std.mem.span(c.notmuch_message_get_filename(self.message_handle));
         }
@@ -139,28 +194,70 @@ pub const Db = struct {
     pub const Thread = struct {
         thread_handle: *c.notmuch_thread_t,
 
-        // Get the thread ID of 'thread'.
-        //
-        // The returned string belongs to 'thread' and as such, should not be
-        // modified by the caller and will only be valid for as long as the
-        // thread is valid, (which is until deinit() or the query from which
-        // it derived is destroyed).
+        /// Get the thread ID of 'thread'.
+        ///
+        /// The returned string belongs to 'thread' and as such, should not be
+        /// modified by the caller and will only be valid for as long as the
+        /// thread is valid, (which is until deinit() or the query from which
+        /// it derived is destroyed).
         pub fn getThreadId(self: Thread) []const u8 {
             return std.mem.span(c.notmuch_thread_get_thread_id(self.thread_handle));
         }
 
-        // Get the total number of messages in 'thread'.
-        //
-        // This count consists of all messages in the database belonging to
-        // this thread. Contrast with notmuch_thread_get_matched_messages() .
+        /// The returned string is a comma-separated list of the names of the
+        /// authors of mail messages in the query results that belong to this
+        /// thread.
+        pub fn getAuthors(self: Thread) []const u8 {
+            return std.mem.span(c.notmuch_thread_get_authors(self.thread_handle));
+        }
+
+        /// Gets the date of the newest message in 'thread' as a time_t value
+        pub fn getNewestDate(self: Thread) u64 {
+            return @intCast(c.notmuch_thread_get_newest_date(self.thread_handle));
+        }
+
+        /// Gets the date of the oldest message in 'thread' as a time_t value
+        pub fn getOldestDate(self: Thread) u64 {
+            return @intCast(c.notmuch_thread_get_oldest_date(self.thread_handle));
+        }
+
+        /// Gets the tags of the thread
+        pub fn getTags(self: Thread) !TagsIterator {
+            return .{
+                .tags_state = c.notmuch_thread_get_tags(self.thread_handle) orelse return error.CouldNotGetIterator,
+            };
+        }
+
+        /// Get the subject of 'thread' as a UTF-8 string.
+        ///
+        /// The subject is taken from the first message (according to the query
+        /// order---see notmuch_query_set_sort) in the query results that
+        /// belongs to this thread.
+        pub fn getSubject(self: Thread) []const u8 {
+            return std.mem.span(c.notmuch_thread_get_subject(self.thread_handle));
+        }
+
+        /// Get the total number of messages in 'thread' that matched the search
+        ///
+        /// This count includes only the messages in this thread that were
+        /// matched by the search from which the thread was created and were
+        /// not excluded by any exclude tags passed in with the query (see
+        pub fn getMatchedMessages(self: Thread) c_int {
+            return c.notmuch_thread_get_matched_messages(self.thread_handle);
+        }
+
+        /// Get the total number of messages in 'thread'.
+        ///
+        /// This count consists of all messages in the database belonging to
+        /// this thread. Contrast with notmuch_thread_get_matched_messages() .
         pub fn getTotalMessages(self: Thread) c_int {
             return c.notmuch_thread_get_total_messages(self.thread_handle);
         }
 
-        // Get the total number of files in 'thread'.
-        //
-        // This sums notmuch_message_count_files over all messages in the
-        // thread
+        /// Get the total number of files in 'thread'.
+        ///
+        /// This sums notmuch_message_count_files over all messages in the
+        /// thread
         pub fn getTotalFiles(self: Thread) c_int {
             return c.notmuch_thread_get_total_files(self.thread_handle);
         }
