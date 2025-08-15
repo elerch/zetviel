@@ -109,6 +109,8 @@ fn configure(compile: *std.Build.Step.Compile, paths: std.zig.system.NativePaths
         compile.addIncludePath(.{ .cwd_relative = dir });
     for (paths.rpaths.items) |dir|
         compile.addRPath(.{ .cwd_relative = dir });
+
+    compile.linkSystemLibrary2("gmime-3.0", .{ .use_pkg_config = .force });
 }
 
 fn checkNix(b: *std.Build, target_query: *std.Target.Query) !std.zig.system.NativePaths {
@@ -207,7 +209,7 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
             const interp_offset = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(sh_contents[0x18 .. 0x19 + 8]))).*); // 0x9218
             const interp_size = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(sh_contents[0x20 .. 0x21 + 8]))).*); // 2772
             // std.debug.print("Found interpreter at {x}, size: {}\n", .{ interp_offset, interp_size });
-            interp = file_contents[interp_offset .. interp_offset + 1 + interp_size];
+            interp = file_contents[interp_offset .. interp_offset + interp_size];
             // std.debug.print("Interp: {s}\n", .{interp});
         }
     }
@@ -217,6 +219,8 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
     }
 
     var dl = std.Target.DynamicLinker{ .buffer = undefined, .len = 0 };
-    dl.set(interp);
+    // The .interp section contains a null-terminated string, so we need to trim the null terminator
+    const trimmed_interp = std.mem.trimRight(u8, interp.?, &[_]u8{0});
+    dl.set(trimmed_interp);
     return dl;
 }

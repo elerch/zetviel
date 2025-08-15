@@ -26,9 +26,7 @@
 //! ```
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("notmuch.h");
-});
+const c = @import("c.zig").c;
 
 pub const Status = struct {
     err: ?anyerror = null,
