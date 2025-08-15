@@ -16,7 +16,7 @@ pub fn main() !void {
 
     // Example of using the root.zig functionality
     const allocator = std.heap.page_allocator;
-    var db_result = root.openNotmuchDb(allocator, "mail") catch |err| {
+    var db_result = root.openNotmuchDb(allocator, "mail", null) catch |err| {
         std.debug.print("Failed to open notmuch database: {}\n", .{err});
         return;
     };

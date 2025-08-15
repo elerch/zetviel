@@ -26,9 +26,7 @@
 //! ```
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("notmuch.h");
-});
+const c = @import("c.zig").c;
 
 pub const Status = struct {
     err: ?anyerror = null,
@@ -59,7 +57,7 @@ pub const Db = struct {
             "",
             null,
             &db,
-            &err,
+            @ptrCast(&err),
         );
         defer if (err) |e| if (status == null) std.c.free(e);
         if (open_status != c.NOTMUCH_STATUS_SUCCESS) {
@@ -99,7 +97,7 @@ pub const Db = struct {
     //     query = notmuch_query_create (database, query_string);
     //
     //     for (stat = notmuch_query_search_threads (query, &threads);
-    //	    stat == NOTMUCH_STATUS_SUCCESS &&
+    //          stat == NOTMUCH_STATUS_SUCCESS &&
     //          notmuch_threads_valid (threads);
     //          notmuch_threads_move_to_next (threads))
     //     {

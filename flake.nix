@@ -14,6 +14,10 @@
          devShells.default = systempkgs.mkShell {
             buildInputs = with systempkgs; [
                notmuch
+               gmime3
+               glibc
+               glibc_multi
+               pkg-config
             ];
          };
        }
