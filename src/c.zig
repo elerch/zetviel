@@ -1,7 +1,6 @@
 pub const c = @cImport({
-    @cInclude("notmuch.h");
-
-    // vv - Needed for gmime
+    @cInclude("time.h");
     @cInclude("fcntl.h");
+    @cInclude("notmuch.h");
     @cInclude("gmime/gmime.h");
 });

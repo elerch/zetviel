@@ -17,7 +17,10 @@ pub fn deinit(self: Self) void {
 
 /// Initializes gmime if not already initialized
 fn gmimeInit(self: *Self) void {
-    if (!self.initialized) gmime.g_mime_init();
+    if (!self.initialized) {
+        gmime.g_mime_init();
+        self.initialized = true;
+    }
 }
 
 pub fn openMessage(self: *Self, filename: [:0]const u8) !Message {
@@ -112,7 +115,7 @@ pub const Message = struct {
     fn findHtmlInMultipart(multipart: *gmime.GMimeMultipart, allocator: std.mem.Allocator) !?[]const u8 {
         const count = gmime.g_mime_multipart_get_count(multipart);
 
-        // Look for HTML part
+        // Look for HTML part first (preferred in multipart/alternative)
         var i: usize = 0;
         while (i < count) : (i += 1) {
             const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
@@ -131,7 +134,6 @@ pub const Message = struct {
             if (std.mem.eql(u8, std.mem.span(part_mime_type), "text") and
                 std.mem.eql(u8, std.mem.span(part_mime_subtype), "html"))
             {
-
                 // Try to get the text content
                 if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_text_part_get_type()) != 0) {
                     const text_part = @as(*gmime.GMimeTextPart, @ptrCast(part));
@@ -141,8 +143,15 @@ pub const Message = struct {
                     }
                 }
             }
-            // Check if this is another multipart container (for nested multiparts)
-            else if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
+        }
+
+        // If no HTML found, check for nested multiparts (like multipart/related inside multipart/alternative)
+        i = 0;
+        while (i < count) : (i += 1) {
+            const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
+            if (part == null) continue;
+
+            if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
                 const nested_multipart = @as(*gmime.GMimeMultipart, @ptrCast(part));
                 if (try findHtmlInMultipart(nested_multipart, allocator)) |content| {
                     return content;
@@ -153,18 +162,42 @@ pub const Message = struct {
         return null;
     }
 
-    pub fn rawBody(_: Message, allocator: std.mem.Allocator) ![]const u8 {
-        // For the test cases, we know exactly what HTML content we need to return
-        // This is a simplified implementation that directly returns the expected HTML
-        const html_content = 
-            \\<html>
-            \\<head>
-            \\<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-            \\</head>
-            \\<body><a href="https://unmaskfauci.com/assets/images/chw.php"><img src="https://imgpx.com/dfE6oYsvHoYw.png"></a> <div><img width=1 height=1 alt="" src="https://vnevent.net/wp-content/plugins/wp-automatic/awe.php?QFYiTaVCm0ogM30sC5RNRb%2FKLO0%2FqO3iN9A89RgPbrGjPGsdVierqrtB7w8mnIqJugBVA5TZVG%2F6MFLMOrK9z4D6vgFBDRgH88%2FpEmohBbpaSFf4wx1l9S4LGJd87EK6"></div></body></html>
-        ;
-        
-        return try allocator.dupe(u8, html_content);
+    pub fn rawBody(self: Message, allocator: std.mem.Allocator) ![]const u8 {
+        // Get the message body using GMime
+        const body = gmime.g_mime_message_get_body(self.message);
+        if (body == null) return error.NoMessageBody;
+
+        // Check if it's a multipart message
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_multipart_get_type()) != 0) {
+            const multipart = @as(*gmime.GMimeMultipart, @ptrCast(body));
+
+            // Try to find HTML content in the multipart
+            if (try findHtmlInMultipart(multipart, allocator)) |html_content| {
+                // Trim trailing whitespace and newlines to match expected format
+                return std.mem.trimRight(u8, html_content, " \t\r\n");
+            }
+        }
+
+        // If it's not multipart or we didn't find HTML, check if it's a single text part
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_text_part_get_type()) != 0) {
+            const text_part = @as(*gmime.GMimeTextPart, @ptrCast(body));
+            const text = gmime.g_mime_text_part_get_text(text_part);
+            if (text != null) {
+                const content = try allocator.dupe(u8, std.mem.span(text));
+                return std.mem.trimRight(u8, content, " \t\r\n");
+            }
+        }
+
+        // Fallback: convert the entire body to string
+        const body_string = gmime.g_mime_object_to_string(body, null);
+        if (body_string == null) return error.BodyConversionFailed;
+
+        defer gmime.g_free(body_string);
+        const slice = std.mem.span(body_string);
+        return try allocator.dupe(
+            u8,
+            std.mem.trimRight(u8, slice, " \t\r\n"),
+        );
     }
 };
 
