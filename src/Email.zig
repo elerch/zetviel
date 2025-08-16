@@ -29,17 +29,17 @@ pub fn openMessage(self: *Self, filename: [:0]const u8) !Message {
     // Open the file as a GMime stream
     const stream = gmime.g_mime_stream_fs_open(filename.ptr, gmime.O_RDONLY, 0o0644, null) orelse
         return error.FileOpenFailed;
+    defer gmime.g_object_unref(stream);
 
     // Create a parser for the stream
     const parser = gmime.g_mime_parser_new_with_stream(stream) orelse
         return error.ParserCreationFailed;
-    gmime.g_object_unref(stream);
+    defer gmime.g_object_unref(parser);
 
     // Parse the message
     const message = gmime.g_mime_parser_construct_message(parser, null) orelse
         return error.MessageParsingFailed;
 
-    gmime.g_object_unref(parser);
     return .{
         .filename = filename,
         .message = message,
@@ -113,11 +113,13 @@ pub const Message = struct {
 
     // Helper function to find HTML content in a multipart container
     fn findHtmlInMultipart(multipart: *gmime.GMimeMultipart, allocator: std.mem.Allocator) !?[]const u8 {
-        const count = gmime.g_mime_multipart_get_count(multipart);
+        const mpgc = gmime.g_mime_multipart_get_count(multipart);
+        if (mpgc == -1) return error.NoMultipartCount;
+        const count: usize = @intCast(mpgc);
 
+        // std.debug.print("\n\nCount: {}\n", .{count});
         // Look for HTML part first (preferred in multipart/alternative)
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
+        for (0..count) |i| {
             const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
             if (part == null) continue;
 
@@ -126,19 +128,22 @@ pub const Message = struct {
 
             const part_mime_type = gmime.g_mime_content_type_get_mime_type(part_content_type);
             if (part_mime_type == null) continue;
+            defer gmime.g_free(part_mime_type);
+            // std.debug.print("Mime type: {s}\n", .{std.mem.span(part_mime_type)});
 
-            const part_mime_subtype = gmime.g_mime_content_type_get_media_subtype(part_content_type);
-            if (part_mime_subtype == null) continue;
+            // subtype is "html", but mime type is "text/html", so we don't need this
+            // const part_mime_subtype = gmime.g_mime_content_type_get_media_subtype(part_content_type);
+            // if (part_mime_subtype == null) continue;
+            // std.debug.print("Media subtype type: {s}\n", .{std.mem.span(part_mime_subtype)});
 
             // Check if this is text/html
-            if (std.mem.eql(u8, std.mem.span(part_mime_type), "text") and
-                std.mem.eql(u8, std.mem.span(part_mime_subtype), "html"))
-            {
+            if (std.mem.eql(u8, std.mem.span(part_mime_type), "text/html")) {
                 // Try to get the text content
                 if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_text_part_get_type()) != 0) {
                     const text_part = @as(*gmime.GMimeTextPart, @ptrCast(part));
                     const text = gmime.g_mime_text_part_get_text(text_part);
                     if (text != null) {
+                        defer gmime.g_free(text);
                         return try allocator.dupe(u8, std.mem.span(text));
                     }
                 }
@@ -146,19 +151,19 @@ pub const Message = struct {
         }
 
         // If no HTML found, check for nested multiparts (like multipart/related inside multipart/alternative)
-        i = 0;
-        while (i < count) : (i += 1) {
+        // TODO: Test this code path
+        for (0..count) |i| {
             const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
             if (part == null) continue;
 
             if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
                 const nested_multipart = @as(*gmime.GMimeMultipart, @ptrCast(part));
-                if (try findHtmlInMultipart(nested_multipart, allocator)) |content| {
+                if (try findHtmlInMultipart(nested_multipart, allocator)) |content|
                     return content;
-                }
             }
         }
 
+        std.log.debug("No HTML Multipart found", .{});
         return null;
     }
 
@@ -174,7 +179,7 @@ pub const Message = struct {
             // Try to find HTML content in the multipart
             if (try findHtmlInMultipart(multipart, allocator)) |html_content| {
                 // Trim trailing whitespace and newlines to match expected format
-                return std.mem.trimRight(u8, html_content, " \t\r\n");
+                return html_content;
             }
         }
 
@@ -183,8 +188,9 @@ pub const Message = struct {
             const text_part = @as(*gmime.GMimeTextPart, @ptrCast(body));
             const text = gmime.g_mime_text_part_get_text(text_part);
             if (text != null) {
+                defer gmime.g_free(text);
                 const content = try allocator.dupe(u8, std.mem.span(text));
-                return std.mem.trimRight(u8, content, " \t\r\n");
+                return content;
             }
         }
 
@@ -193,11 +199,7 @@ pub const Message = struct {
         if (body_string == null) return error.BodyConversionFailed;
 
         defer gmime.g_free(body_string);
-        const slice = std.mem.span(body_string);
-        return try allocator.dupe(
-            u8,
-            std.mem.trimRight(u8, slice, " \t\r\n"),
-        );
+        return try allocator.dupe(u8, std.mem.span(body_string));
     }
 };
 
@@ -222,7 +224,7 @@ test "read raw body of message" {
         \\<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         \\</head>
         \\<body><a href="https://unmaskfauci.com/assets/images/chw.php"><img src="https://imgpx.com/dfE6oYsvHoYw.png"></a> <div><img width=1 height=1 alt="" src="https://vnevent.net/wp-content/plugins/wp-automatic/awe.php?QFYiTaVCm0ogM30sC5RNRb%2FKLO0%2FqO3iN9A89RgPbrGjPGsdVierqrtB7w8mnIqJugBVA5TZVG%2F6MFLMOrK9z4D6vgFBDRgH88%2FpEmohBbpaSFf4wx1l9S4LGJd87EK6"></div></body></html>
-    , body);
+    , std.mem.trimRight(u8, body, "\r\n"));
 }
 
 test "can get body from multipart/alternative html preferred" {
@@ -235,11 +237,13 @@ test "can get body from multipart/alternative html preferred" {
     defer msg.deinit();
     const body = try msg.rawBody(allocator);
     defer allocator.free(body);
+    const b = "hi";
+    _ = b;
     try std.testing.expectEqualStrings(
         \\<html>
         \\<head>
         \\<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         \\</head>
         \\<body><a href="https://unmaskfauci.com/assets/images/chw.php"><img src="https://imgpx.com/dfE6oYsvHoYw.png"></a> <div><img width=1 height=1 alt="" src="https://vnevent.net/wp-content/plugins/wp-automatic/awe.php?QFYiTaVCm0ogM30sC5RNRb%2FKLO0%2FqO3iN9A89RgPbrGjPGsdVierqrtB7w8mnIqJugBVA5TZVG%2F6MFLMOrK9z4D6vgFBDRgH88%2FpEmohBbpaSFf4wx1l9S4LGJd87EK6"></div></body></html>
-    , body);
+    , std.mem.trimRight(u8, body, "\r\n"));
 }

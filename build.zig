@@ -85,6 +85,14 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    const valgrind = b.option(bool, "valgrind", "Check for leaks with valgrind") orelse false;
+    if (valgrind)
+        exe_unit_tests.setExecCmd(&[_]?[]const u8{
+            "valgrind",
+            "--leak-check=full",
+            "--show-leak-kinds=all",
+            null,
+        });
 
     configure(exe_unit_tests, paths, reload_discovered_native_paths);
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
