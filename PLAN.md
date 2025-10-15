@@ -65,9 +65,9 @@ Create a netviel clone with improvements:
 ## Phase 6: Polish
 - [ ] Add proper error handling throughout
 - [ ] Add logging
-- [ ] Update README with usage instructions
-- [ ] Add configuration options (NOTMUCH_PATH env var)
-- [ ] Security audit and warnings (local-only usage)
+- [x] Update README with usage instructions
+- [x] Add configuration options (NOTMUCH_PATH env var)
+- [x] Security audit and warnings (local-only usage)
 - [ ] Run `zig fmt .`
 
 ## Notes
