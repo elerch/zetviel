@@ -55,6 +55,9 @@ button:disabled { background: #444; cursor: not-allowed; }
     <script>
 let currentQuery = 'tag:inbox';
 let isLoading = false;
+let currentThreadIndex = -1;
+let threads = [];
+let currentMessageId = null;
 
 async function api(endpoint) {
     const res = await fetch(`/api/${endpoint}`);
@@ -88,12 +91,13 @@ async function loadThreads(query) {
     const list = document.getElementById('thread-list');
 
     try {
-        const threads = await api(`query/${encodeURIComponent(query)}`);
+        threads = await api(`query/${encodeURIComponent(query)}`);
+        currentThreadIndex = -1;
         if (!threads || threads.length === 0) {
             list.innerHTML = '<div class="loading">No threads found</div>';
         } else {
-            list.innerHTML = threads.map(t => `
-                <div class="thread" onclick="loadThread('${t.thread_id}')">
+            list.innerHTML = threads.map((t, i) => `
+                <div class="thread" data-index="${i}" onclick="loadThread('${t.thread_id}', ${i})">
                     <div class="thread-subject">${escapeHtml(t.subject)}</div>
                     <div class="thread-authors">${escapeHtml(t.authors)}</div>
                     <div class="thread-date">${new Date(t.newest_date * 1000).toLocaleString()}</div>
@@ -109,7 +113,9 @@ async function loadThreads(query) {
     }
 }
 
-async function loadThread(threadId) {
+async function loadThread(threadId, index) {
+    currentThreadIndex = index;
+    highlightThread(index);
     setStatus('loading');
     const view = document.getElementById('message-view');
     view.innerHTML = '<div class="loading">Loading messages...</div>';
@@ -130,9 +136,19 @@ async function loadThread(threadId) {
         setStatus('ok');
 
         messages.forEach(m => loadMessageContent(m.message_id));
+        if (messages.length > 0) currentMessageId = messages[0].message_id;
     } catch (e) {
         view.innerHTML = `<div class="error">Error loading thread: ${escapeHtml(e.message)}</div>`;
         setStatus('error');
+    }
+}
+
+function highlightThread(index) {
+    document.querySelectorAll('.thread').forEach(t => t.style.background = '');
+    const thread = document.querySelector(`.thread[data-index="${index}"]`);
+    if (thread) {
+        thread.style.background = '#2a2a2a';
+        thread.scrollIntoView({ block: 'nearest' });
     }
 }
 
@@ -148,6 +164,7 @@ async function loadMessageContent(messageId) {
             ${msg.attachments.length ? `<div class="attachments">Attachments: ${msg.attachments.map(a => escapeHtml(a.filename)).join(', ')}</div>` : ''}
         `;
         div.dataset.html = msg.html_content || '';
+        div.dataset.showingHtml = 'false';
     } catch (e) {
         div.innerHTML = `<div class="error">Error loading message: ${escapeHtml(e.message)}</div>`;
     }
@@ -162,6 +179,28 @@ function showHtml(messageId) {
             <br>
             <div class="content">${html}</div>
         `;
+        div.dataset.showingHtml = 'true';
+    }
+}
+
+function toggleHtmlText() {
+    if (!currentMessageId) return;
+    const div = document.getElementById(`msg-${currentMessageId}`);
+    if (!div) return;
+
+    if (div.dataset.showingHtml === 'true') {
+        loadMessageContent(currentMessageId);
+    } else {
+        showHtml(currentMessageId);
+    }
+}
+
+function moveThread(direction) {
+    if (threads.length === 0) return;
+
+    const newIndex = currentThreadIndex + direction;
+    if (newIndex >= 0 && newIndex < threads.length) {
+        loadThread(threads[newIndex].thread_id, newIndex);
     }
 }
 
@@ -182,9 +221,20 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === '/' && document.activeElement.id !== 'search') {
+        if (document.activeElement.id === 'search') return;
+
+        if (e.key === '/') {
             e.preventDefault();
             document.getElementById('search').focus();
+        } else if (e.key === 'j') {
+            e.preventDefault();
+            moveThread(1);
+        } else if (e.key === 'k') {
+            e.preventDefault();
+            moveThread(-1);
+        } else if (e.key === 't') {
+            e.preventDefault();
+            toggleHtmlText();
         }
     });
 });
