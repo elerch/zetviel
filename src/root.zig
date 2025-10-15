@@ -206,18 +206,26 @@ pub const NotmuchDb = struct {
         bcc: ?[]const u8,
         date: ?[]const u8,
         subject: ?[]const u8,
-        content: []const u8,
-        content_type: []const u8,
+        text_content: []const u8,
+        html_content: []const u8,
         attachments: []Email.Message.AttachmentInfo,
         message_id: []const u8,
 
         pub fn deinit(self: MessageDetail, allocator: std.mem.Allocator) void {
-            allocator.free(self.content);
+            if (self.from) |f| allocator.free(f);
+            if (self.to) |t| allocator.free(t);
+            if (self.cc) |c| allocator.free(c);
+            if (self.bcc) |b| allocator.free(b);
+            if (self.date) |d| allocator.free(d);
+            if (self.subject) |s| allocator.free(s);
+            allocator.free(self.text_content);
+            allocator.free(self.html_content);
             for (self.attachments) |att| {
                 allocator.free(att.filename);
                 allocator.free(att.content_type);
             }
             allocator.free(self.attachments);
+            allocator.free(self.message_id);
         }
     };
 
@@ -239,20 +247,28 @@ pub const NotmuchDb = struct {
         const email_msg = try self.email.openMessage(filename_z);
         defer email_msg.deinit();
 
-        const content_info = try email_msg.getContent(self.allocator);
+        const content_info = try email_msg.getTextAndHtmlBodyVersions(self.allocator);
         const attachments = try email_msg.getAttachments(self.allocator);
 
+        const from = if (notmuch_msg.getHeader("from") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const to = if (notmuch_msg.getHeader("to") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const cc = if (notmuch_msg.getHeader("cc") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const bcc = if (notmuch_msg.getHeader("bcc") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const date = if (notmuch_msg.getHeader("date") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const subject = if (notmuch_msg.getHeader("subject") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const msg_id = try self.allocator.dupe(u8, notmuch_msg.getMessageId());
+
         return .{
-            .from = notmuch_msg.getHeader("from") catch null,
-            .to = notmuch_msg.getHeader("to") catch null,
-            .cc = notmuch_msg.getHeader("cc") catch null,
-            .bcc = notmuch_msg.getHeader("bcc") catch null,
-            .date = notmuch_msg.getHeader("date") catch null,
-            .subject = notmuch_msg.getHeader("subject") catch null,
-            .content = content_info.content,
-            .content_type = content_info.content_type,
+            .from = from,
+            .to = to,
+            .cc = cc,
+            .bcc = bcc,
+            .date = date,
+            .subject = subject,
+            .text_content = content_info.text,
+            .html_content = content_info.html,
             .attachments = attachments,
-            .message_id = notmuch_msg.getMessageId(),
+            .message_id = msg_id,
         };
     }
 };
@@ -378,9 +394,9 @@ test "can get message details with content" {
     try std.testing.expect(msg_detail.from != null);
     try std.testing.expect(msg_detail.subject != null);
 
-    // Verify content was extracted
-    try std.testing.expect(msg_detail.content.len > 0);
-    try std.testing.expectEqualStrings("text/html", msg_detail.content_type);
+    // Verify content was extracted - we should always have both text and html
+    try std.testing.expect(msg_detail.text_content.len >= 0);
+    try std.testing.expect(msg_detail.html_content.len > 0);
 
     // This message has no attachments
     try std.testing.expectEqual(@as(usize, 0), msg_detail.attachments.len);

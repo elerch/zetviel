@@ -4,7 +4,36 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zetviel</title>
-    <link rel="stylesheet" href="/style.css">
+    <style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; background: #1e1e1e; color: #e0e0e0; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid #333; background: #252525; }
+h1 { font-size: 1.5rem; }
+.status-ok { color: #0f0; }
+.status-error { color: #f00; }
+.status-loading { color: #ff0; }
+.search-bar { padding: 1rem; border-bottom: 1px solid #333; background: #252525; }
+#search { width: 70%; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #e0e0e0; }
+button { padding: 0.5rem 1rem; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; }
+button:hover { background: #0052a3; }
+button:disabled { background: #444; cursor: not-allowed; }
+.container { display: flex; height: calc(100vh - 140px); }
+.thread-list { width: 40%; overflow-y: auto; border-right: 1px solid #333; }
+.thread { padding: 1rem; border-bottom: 1px solid #2a2a2a; cursor: pointer; }
+.thread:hover { background: #2a2a2a; }
+.thread-subject { font-weight: bold; margin-bottom: 0.25rem; }
+.thread-authors { color: #999; font-size: 0.9rem; }
+.thread-date { color: #666; font-size: 0.85rem; }
+.message-view { width: 60%; overflow-y: auto; padding: 1rem; }
+.message { margin-bottom: 2rem; padding: 1rem; border: 1px solid #333; border-radius: 4px; background: #252525; }
+.message-header { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #333; }
+.message-content { margin-top: 1rem; }
+.content { padding: 1rem; background: #2a2a2a; border-radius: 4px; }
+.content pre { white-space: pre-wrap; word-wrap: break-word; }
+.attachments { margin-top: 1rem; padding: 0.5rem; background: #3a3a00; border-radius: 4px; }
+.loading { padding: 1rem; text-align: center; color: #999; }
+.error { padding: 1rem; background: #3a0000; border: 1px solid #600; border-radius: 4px; margin: 1rem; }
+    </style>
 </head>
 <body>
     <div id="app">
@@ -23,6 +52,140 @@
             <div id="message-view" class="message-view"></div>
         </div>
     </div>
-    <script src="/app.js"></script>
+    <script>
+let currentQuery = 'tag:inbox';
+let isLoading = false;
+
+async function api(endpoint) {
+    const res = await fetch(`/api/${endpoint}`);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+}
+
+function setStatus(state) {
+    const status = document.getElementById('status');
+    status.className = state === 'loading' ? 'status-loading' : state === 'ok' ? 'status-ok' : 'status-error';
+}
+
+function setLoading(loading) {
+    isLoading = loading;
+    const btn = document.querySelector('.search-bar button');
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Loading...' : 'Search';
+}
+
+async function search() {
+    if (isLoading) return;
+    const query = document.getElementById('search').value;
+    currentQuery = query;
+    history.pushState({ query }, '', `/?q=${encodeURIComponent(query)}`);
+    await loadThreads(query);
+}
+
+async function loadThreads(query) {
+    setLoading(true);
+    setStatus('loading');
+    const list = document.getElementById('thread-list');
+
+    try {
+        const threads = await api(`query/${encodeURIComponent(query)}`);
+        if (!threads || threads.length === 0) {
+            list.innerHTML = '<div class="loading">No threads found</div>';
+        } else {
+            list.innerHTML = threads.map(t => `
+                <div class="thread" onclick="loadThread('${t.thread_id}')">
+                    <div class="thread-subject">${escapeHtml(t.subject)}</div>
+                    <div class="thread-authors">${escapeHtml(t.authors)}</div>
+                    <div class="thread-date">${new Date(t.newest_date * 1000).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+        setStatus('ok');
+    } catch (e) {
+        list.innerHTML = `<div class="error">Error loading threads: ${escapeHtml(e.message)}</div>`;
+        setStatus('error');
+    } finally {
+        setLoading(false);
+    }
+}
+
+async function loadThread(threadId) {
+    setStatus('loading');
+    const view = document.getElementById('message-view');
+    view.innerHTML = '<div class="loading">Loading messages...</div>';
+
+    try {
+        const messages = await api(`thread/${threadId}`);
+        view.innerHTML = messages.map(m => `
+            <div class="message">
+                <div class="message-header">
+                    <strong>From:</strong> ${escapeHtml(m.from || '')}<br>
+                    <strong>To:</strong> ${escapeHtml(m.to || '')}<br>
+                    <strong>Date:</strong> ${escapeHtml(m.date || '')}<br>
+                    <strong>Subject:</strong> ${escapeHtml(m.subject || '')}
+                </div>
+                <div id="msg-${m.message_id}" class="message-content"><div class="loading">Loading content...</div></div>
+            </div>
+        `).join('');
+        setStatus('ok');
+
+        messages.forEach(m => loadMessageContent(m.message_id));
+    } catch (e) {
+        view.innerHTML = `<div class="error">Error loading thread: ${escapeHtml(e.message)}</div>`;
+        setStatus('error');
+    }
+}
+
+async function loadMessageContent(messageId) {
+    const div = document.getElementById(`msg-${messageId}`);
+
+    try {
+        const msg = await api(`message/${messageId}`);
+        div.innerHTML = `
+            <div class="content"><pre>${escapeHtml(msg.text_content)}</pre></div>
+            ${msg.html_content ? `<button onclick="showHtml('${messageId}')">Show HTML Version</button>` : ''}
+            ${msg.attachments.length ? `<div class="attachments">Attachments: ${msg.attachments.map(a => escapeHtml(a.filename)).join(', ')}</div>` : ''}
+        `;
+        div.dataset.html = msg.html_content || '';
+    } catch (e) {
+        div.innerHTML = `<div class="error">Error loading message: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function showHtml(messageId) {
+    const div = document.getElementById(`msg-${messageId}`);
+    const html = div.dataset.html;
+    if (html) {
+        div.innerHTML = `
+            <div class="content">${html}</div>
+            <button onclick="loadMessageContent('${messageId}')">Show Text Version</button>
+        `;
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(location.search);
+    const query = params.get('q') || 'tag:inbox';
+    document.getElementById('search').value = query;
+    loadThreads(query);
+
+    document.getElementById('search').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') search();
+    });
+});
+
+window.addEventListener('popstate', (e) => {
+    if (e.state?.query) {
+        document.getElementById('search').value = e.state.query;
+        loadThreads(e.state.query);
+    }
+});
+    </script>
 </body>
 </html>

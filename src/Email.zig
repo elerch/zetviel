@@ -1,5 +1,6 @@
 const std = @import("std");
 const gmime = @import("c.zig").c;
+const textTransformation = @import("textTransformation.zig");
 
 const Self = @This();
 
@@ -167,6 +168,48 @@ pub const Message = struct {
         return null;
     }
 
+    fn findTextInMultipart(multipart: *gmime.GMimeMultipart, allocator: std.mem.Allocator) !?[]const u8 {
+        const mpgc = gmime.g_mime_multipart_get_count(multipart);
+        if (mpgc == -1) return error.NoMultipartCount;
+        const count: usize = @intCast(mpgc);
+
+        for (0..count) |i| {
+            const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
+            if (part == null) continue;
+
+            const part_content_type = gmime.g_mime_object_get_content_type(part);
+            if (part_content_type == null) continue;
+
+            const part_mime_type = gmime.g_mime_content_type_get_mime_type(part_content_type);
+            if (part_mime_type == null) continue;
+            defer gmime.g_free(part_mime_type);
+
+            if (std.mem.eql(u8, std.mem.span(part_mime_type), "text/plain")) {
+                if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_text_part_get_type()) != 0) {
+                    const text_part: *gmime.GMimeTextPart = @ptrCast(part);
+                    const text = gmime.g_mime_text_part_get_text(text_part);
+                    if (text != null) {
+                        defer gmime.g_free(text);
+                        return try allocator.dupe(u8, std.mem.span(text));
+                    }
+                }
+            }
+        }
+
+        for (0..count) |i| {
+            const part = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
+            if (part == null) continue;
+
+            if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
+                const nested_multipart: *gmime.GMimeMultipart = @ptrCast(part);
+                if (try findTextInMultipart(nested_multipart, allocator)) |content|
+                    return content;
+            }
+        }
+
+        return null;
+    }
+
     pub fn rawBody(self: Message, allocator: std.mem.Allocator) ![]const u8 {
         // Get the message body using GMime
         const body = gmime.g_mime_message_get_body(self.message);
@@ -232,6 +275,62 @@ pub const Message = struct {
         }
 
         return error.NoTextContent;
+    }
+
+    pub fn getTextAndHtmlBodyVersions(self: Message, allocator: std.mem.Allocator) !struct { text: []const u8, html: []const u8 } {
+        const body = gmime.g_mime_message_get_body(self.message);
+        if (body == null) return error.NoMessageBody;
+
+        var text_content: ?[]const u8 = null;
+        var html_content: ?[]const u8 = null;
+
+        // Check if it's a multipart message
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_multipart_get_type()) != 0) {
+            const multipart: *gmime.GMimeMultipart = @ptrCast(body);
+            text_content = try findTextInMultipart(multipart, allocator);
+            html_content = try findHtmlInMultipart(multipart, allocator);
+        } else if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_text_part_get_type()) != 0) {
+            const text_part: *gmime.GMimeTextPart = @ptrCast(body);
+            const text = gmime.g_mime_text_part_get_text(text_part);
+            if (text != null) {
+                defer gmime.g_free(text);
+                const content_type_obj = gmime.g_mime_object_get_content_type(body);
+                const mime_type = if (content_type_obj != null)
+                    gmime.g_mime_content_type_get_mime_type(content_type_obj)
+                else
+                    null;
+                const ct = if (mime_type != null) std.mem.span(mime_type) else "text/plain";
+                const content = try allocator.dupe(u8, std.mem.span(text));
+                if (std.mem.eql(u8, ct, "text/html")) {
+                    html_content = content;
+                } else {
+                    text_content = content;
+                }
+            }
+        }
+
+        // Ensure we have both text and html versions
+        if (text_content == null and html_content != null) {
+            text_content = try textTransformation.htmlToText(allocator, html_content.?);
+        }
+        if (html_content == null and text_content != null) {
+            html_content = try std.fmt.allocPrint(allocator,
+                \\<html>
+                \\<head><title>No HTML version available</title></head>
+                \\<body>No HTML version available. Text is:<br><pre>{s}</pre></body>
+                \\</html>
+            , .{text_content.?});
+        }
+
+        return .{
+            .text = text_content orelse "no text or html versions available",
+            .html = html_content orelse
+                \\<html>
+                \\<head><title>No text or HTML version available</title></head>
+                \\<body>No text or HTML versions available</body>
+                \\</html>
+            ,
+        };
     }
 
     pub fn getHeader(self: Message, name: []const u8) ?[]const u8 {
