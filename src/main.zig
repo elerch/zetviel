@@ -25,7 +25,9 @@ pub fn main() !void {
     defer server.deinit();
 
     // API routes
-    var router = try server.router(.{});
+    var security_headers = SecurityHeaders{};
+    const security_middleware = httpz.Middleware(*root.NotmuchDb).init(&security_headers);
+    var router = try server.router(.{ .middlewares = &.{security_middleware} });
     router.get("/api/query/*", queryHandler, .{});
     router.get("/api/thread/:thread_id", threadHandler, .{});
     router.get("/api/message/:message_id", messageHandler, .{});
@@ -35,6 +37,17 @@ pub fn main() !void {
 
     try server.listen();
 }
+
+const SecurityHeaders = struct {
+    pub fn execute(_: *SecurityHeaders, req: *httpz.Request, res: *httpz.Response, executor: anytype) !void {
+        res.header("X-Frame-Options", "deny");
+        res.header("X-Content-Type-Options", "nosniff");
+        res.header("X-XSS-Protection", "1; mode=block");
+        res.header("Referrer-Policy", "no-referrer");
+        _ = req;
+        return executor.next();
+    }
+};
 
 fn queryHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) !void {
     const query = req.url.path[11..]; // Skip "/api/query/"
