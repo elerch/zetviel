@@ -19,13 +19,16 @@ pub fn build(b: *std.Build) !void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "zetviel",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
+    const lib_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "zetviel",
+        .linkage = .static,
+        .root_module = lib_module,
     });
 
     // This declares intent for the library to be installed into the standard
@@ -33,11 +36,15 @@ pub fn build(b: *std.Build) !void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    const exe = b.addExecutable(.{
-        .name = "zetviel",
+    const exe_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "zetviel",
+        .root_module = exe_module,
     });
 
     configure(exe, paths, reload_discovered_native_paths);
@@ -71,19 +78,27 @@ pub fn build(b: *std.Build) !void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const lib_unit_tests = b.addTest(.{
+    const lib_test_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const lib_unit_tests = b.addTest(.{
+        .root_module = lib_test_module,
     });
     configure(lib_unit_tests, paths, reload_discovered_native_paths);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
-    const exe_unit_tests = b.addTest(.{
+    const exe_test_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const exe_unit_tests = b.addTest(.{
+        .root_module = exe_test_module,
     });
     const valgrind = b.option(bool, "valgrind", "Check for leaks with valgrind") orelse false;
     if (valgrind)
@@ -123,7 +138,7 @@ fn configure(compile: *std.Build.Step.Compile, paths: std.zig.system.NativePaths
 
 fn checkNix(b: *std.Build, target_query: *std.Target.Query) !std.zig.system.NativePaths {
     const native_result = b.resolveTargetQuery(target_query.*);
-    const paths = try std.zig.system.NativePaths.detect(b.allocator, native_result.result);
+    const paths = try std.zig.system.NativePaths.detect(b.allocator, &native_result.result);
 
     // If we are not using nix, we can build anywhere provided the system dependencies exist
     if (!std.process.hasEnvVarConstant("NIX_BINTOOLS")) return paths;
@@ -181,19 +196,19 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
         return error.FileNotExpectedElf;
     }
     // Section header table
-    const e_shoff = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(file_contents[0x28 .. 0x29 + 8]))).*); // E8 9D 00 00 00 00 00 00
+    const e_shoff = std.mem.readInt(u64, file_contents[0x28..][0..8], .little); // E8 9D 00 00 00 00 00 00
     // Number of sections
-    const e_shnum = std.mem.littleToNative(u16, @as(*u16, @ptrFromInt(@intFromPtr(file_contents[0x3c .. 0x3d + 2]))).*); // 1d
+    const e_shnum = std.mem.readInt(u16, file_contents[0x3c..][0..2], .little); // 1d
 
     // Index of section header that contains section header names
-    const e_shstrndx = std.mem.littleToNative(u16, @as(*u16, @ptrFromInt(@intFromPtr(file_contents[0x3e .. 0x3f + 2]))).*); // 1c
+    const e_shstrndx = std.mem.readInt(u16, file_contents[0x3e..][0..2], .little); // 1c
     // Beginning of section 0x1c (28) that contains header names
     const e_shstroff = e_shoff + (64 * e_shstrndx); // 0xa4e8
     const shstrtab_contents = file_contents[e_shstroff .. e_shstroff + 1 + (e_shnum * 64)];
     // Offset for my set of null terminated strings
-    const shstrtab_sh_offset = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(shstrtab_contents[0x18 .. 0x19 + 8]))).*); // 0x9cec
+    const shstrtab_sh_offset = std.mem.readInt(u64, shstrtab_contents[0x18..][0..8], .little); // 0x9cec
     // Total size of section
-    const shstrtab_sh_size = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(shstrtab_contents[0x20 .. 0x21 + 8]))).*); // 250
+    const shstrtab_sh_size = std.mem.readInt(u64, shstrtab_contents[0x20..][0..8], .little); // 250
     // std.debug.print("e_shoff: {x}, e_shstrndx: {x}, e_shstroff: {x}, e_shnum: {x}, shstrtab_sh_offset: {x}, shstrtab_sh_size: {}\n", .{ e_shoff, e_shstrndx, e_shstroff, e_shnum, shstrtab_sh_offset, shstrtab_sh_size });
     const shstrtab_strings = file_contents[shstrtab_sh_offset .. shstrtab_sh_offset + 1 + shstrtab_sh_size];
     var interp: ?[]const u8 = null;
@@ -201,10 +216,10 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
         // get section offset. Look for type == SHT_PROGBITS, then go fetch name
         const sh_off = e_shoff + (64 * shndx);
         const sh_contents = file_contents[sh_off .. sh_off + 1 + 64];
-        const sh_type = std.mem.littleToNative(u16, @as(*u16, @ptrFromInt(@intFromPtr(sh_contents[0x04 .. 0x05 + 2]))).*);
+        const sh_type = std.mem.readInt(u16, sh_contents[0x04..][0..2], .little);
         if (sh_type != 0x01) continue;
         // This is an offset to the null terminated string in our string content
-        const sh_name_offset = std.mem.littleToNative(u16, @as(*u16, @ptrFromInt(@intFromPtr(sh_contents[0x00 .. 0x01 + 2]))).*);
+        const sh_name_offset = std.mem.readInt(u16, sh_contents[0x00..][0..2], .little);
         const sentinel = std.mem.indexOfScalar(u8, shstrtab_strings[sh_name_offset..], 0);
         if (sentinel == null) {
             std.log.err("Invalid ELF file", .{});
@@ -214,8 +229,8 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
         // std.debug.print("section name: {s}\n", .{sh_name});
         if (std.mem.eql(u8, ".interp", sh_name)) {
             // found interpreter
-            const interp_offset = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(sh_contents[0x18 .. 0x19 + 8]))).*); // 0x9218
-            const interp_size = std.mem.littleToNative(u64, @as(*u64, @ptrFromInt(@intFromPtr(sh_contents[0x20 .. 0x21 + 8]))).*); // 2772
+            const interp_offset = std.mem.readInt(u64, sh_contents[0x18..][0..8], .little); // 0x9218
+            const interp_size = std.mem.readInt(u64, sh_contents[0x20..][0..8], .little); // 2772
             // std.debug.print("Found interpreter at {x}, size: {}\n", .{ interp_offset, interp_size });
             interp = file_contents[interp_offset .. interp_offset + interp_size];
             // std.debug.print("Interp: {s}\n", .{interp});
@@ -226,7 +241,11 @@ fn getDynamicLinker(elf_path: []const u8) !std.Target.DynamicLinker {
         return error.CouldNotLocateInterpreter;
     }
 
-    var dl = std.Target.DynamicLinker{ .buffer = undefined, .len = 0 };
+    // SAFETY: buffer is set in shortly in dl.set() call
+    var dl = std.Target.DynamicLinker{
+        .buffer = undefined,
+        .len = 0,
+    };
     // The .interp section contains a null-terminated string, so we need to trim the null terminator
     const trimmed_interp = std.mem.trimRight(u8, interp.?, &[_]u8{0});
     dl.set(trimmed_interp);

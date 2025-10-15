@@ -1,6 +1,8 @@
 [tools]
-zig = "0.14.1"
-zls = "0.14.0"
+pre-commit = "latest"
+"ubi:DonIsaac/zlint" = "latest"
+zig = "0.15.2"
+zls = "0.15.0"
 
 [hooks]
 enter = 'echo use "nix develop" if you want to build'

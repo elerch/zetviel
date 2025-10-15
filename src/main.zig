@@ -8,11 +8,8 @@ pub fn main() !void {
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    try stdout_file.writeAll("Run `zig build test` to run the tests.\n");
 
     // Example of using the root.zig functionality
     const allocator = std.heap.page_allocator;
@@ -23,6 +20,4 @@ pub fn main() !void {
     defer db_result.close();
 
     std.debug.print("Successfully opened notmuch database at: {s}\n", .{db_result.path});
-
-    try bw.flush(); // don't forget to flush!
 }

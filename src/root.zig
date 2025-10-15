@@ -30,21 +30,21 @@ pub const Thread = struct {
         //  }
         //]
         try jws.beginArray();
-        var mi = self.thread.getMessages() catch return error.OutOfMemory;
+        var mi = self.thread.getMessages() catch return error.WriteFailed;
         while (mi.next()) |m| {
             try jws.beginObject();
             try jws.objectField("from");
-            try jws.write(m.getHeader("from") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("from") catch return error.WriteFailed);
             try jws.objectField("to");
-            try jws.write(m.getHeader("to") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("to") catch return error.WriteFailed);
             try jws.objectField("cc");
-            try jws.write(m.getHeader("cc") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("cc") catch return error.WriteFailed);
             try jws.objectField("bcc");
-            try jws.write(m.getHeader("bcc") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("bcc") catch return error.WriteFailed);
             try jws.objectField("date");
-            try jws.write(m.getHeader("date") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("date") catch return error.WriteFailed);
             try jws.objectField("subject");
-            try jws.write(m.getHeader("subject") catch return error.OutOfMemory);
+            try jws.write(m.getHeader("subject") catch return error.WriteFailed);
             // content, content-type, and attachments are all based on the file itself
             // TODO: init shouldn't fail
             // var message = try Message.init(self.allocator, m.getFilename());
@@ -146,7 +146,7 @@ pub const Threads = struct {
             try jws.objectField("subject");
             try jws.write(t.getSubject());
             try jws.objectField("tags");
-            var tags = t.getTags() catch return error.OutOfMemory;
+            var tags = t.getTags() catch return error.WriteFailed;
             try tags.jsonStringify(jws);
             try jws.objectField("thread_id");
             try jws.write(t.getThreadId());
@@ -254,7 +254,7 @@ test "can stringify general queries" {
     defer db.close();
     var threads = try db.search("Tablets");
     defer threads.deinit();
-    const actual = try std.json.stringifyAlloc(allocator, threads, .{ .whitespace = .indent_2 });
+    const actual = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(threads, .{ .whitespace = .indent_2 })});
     defer allocator.free(actual);
     try std.testing.expectEqualStrings(
         \\[
