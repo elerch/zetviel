@@ -5,11 +5,16 @@ const Email = @import("Email.zig");
 pub const Thread = struct {
     allocator: std.mem.Allocator,
     thread: *notmuch.Db.Thread,
+    iterator: ?*notmuch.Db.ThreadIterator = null,
 
     pub fn init(allocator: std.mem.Allocator, t: *notmuch.Db.Thread) Thread {
         return .{ .allocator = allocator, .thread = t };
     }
     pub fn deinit(self: Thread) void {
+        if (self.iterator) |iter| {
+            iter.deinit();
+            self.allocator.destroy(iter);
+        }
         self.allocator.destroy(self.thread);
     }
 
@@ -178,14 +183,18 @@ pub const NotmuchDb = struct {
     pub fn getThread(self: *NotmuchDb, thread_id: []const u8) !Thread {
         var query_buf: [1024:0]u8 = undefined;
         const query_z = try std.fmt.bufPrintZ(&query_buf, "thread:{s}", .{thread_id});
-        var thread_iter = try self.db.searchThreads(query_z);
-        defer thread_iter.deinit();
+        const iter_ptr = try self.allocator.create(notmuch.Db.ThreadIterator);
+        errdefer self.allocator.destroy(iter_ptr);
+        iter_ptr.* = try self.db.searchThreads(query_z);
+        errdefer iter_ptr.deinit();
 
-        const thread = thread_iter.next();
+        const thread = iter_ptr.next();
         if (thread) |t| {
             const tptr = try self.allocator.create(notmuch.Db.Thread);
             tptr.* = t;
-            return Thread.init(self.allocator, tptr);
+            var result = Thread.init(self.allocator, tptr);
+            result.iterator = iter_ptr;
+            return result;
         }
         return error.ThreadNotFound;
     }
