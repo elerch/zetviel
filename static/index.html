@@ -142,8 +142,9 @@ async function loadMessageContent(messageId) {
     try {
         const msg = await api(`message/${messageId}`);
         div.innerHTML = `
-            <div class="content"><pre>${escapeHtml(msg.text_content)}</pre></div>
             ${msg.html_content ? `<button onclick="showHtml('${messageId}')">Show HTML Version</button>` : ''}
+            <br>
+            <div class="content"><pre>${escapeHtml(msg.text_content)}</pre></div>
             ${msg.attachments.length ? `<div class="attachments">Attachments: ${msg.attachments.map(a => escapeHtml(a.filename)).join(', ')}</div>` : ''}
         `;
         div.dataset.html = msg.html_content || '';
@@ -157,8 +158,9 @@ function showHtml(messageId) {
     const html = div.dataset.html;
     if (html) {
         div.innerHTML = `
-            <div class="content">${html}</div>
             <button onclick="loadMessageContent('${messageId}')">Show Text Version</button>
+            <br>
+            <div class="content">${html}</div>
         `;
     }
 }
