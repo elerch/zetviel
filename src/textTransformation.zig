@@ -22,6 +22,25 @@ pub fn htmlToText(allocator: std.mem.Allocator, html: []const u8) ![]const u8 {
             } else if (i + 8 <= html.len and std.mem.eql(u8, html[i .. i + 8], "</style>")) {
                 in_style = false;
                 i += 7;
+            } else if (i + 4 <= html.len and std.mem.eql(u8, html[i .. i + 4], "<img")) {
+                // Extract alt attribute from img tags
+                const tag_end = std.mem.indexOfScalarPos(u8, html, i, '>') orelse html.len;
+                const tag_content = html[i..tag_end];
+                if (std.mem.indexOf(u8, tag_content, "alt=\"")) |alt_start| {
+                    const alt_value_start = alt_start + 5;
+                    if (std.mem.indexOfScalarPos(u8, tag_content, alt_value_start, '"')) |alt_end| {
+                        const alt_text = tag_content[alt_value_start..alt_end];
+                        if (alt_text.len > 0) {
+                            try result.append(allocator, '[');
+                            for (alt_text) |c| {
+                                try result.append(allocator, c);
+                            }
+                            try result.append(allocator, ']');
+                        }
+                    }
+                }
+                i = tag_end;
+                in_tag = false;
             } else if ((i + 3 <= html.len and std.mem.eql(u8, html[i .. i + 3], "<br")) or
                 (i + 3 <= html.len and std.mem.eql(u8, html[i .. i + 3], "<p>")) or
                 (i + 4 <= html.len and std.mem.eql(u8, html[i .. i + 4], "<div")))
@@ -116,4 +135,20 @@ test "htmlToText - plain text" {
     const text = try htmlToText(allocator, html);
     defer allocator.free(text);
     try std.testing.expectEqualStrings("Just plain text", text);
+}
+
+test "htmlToText - extracts img alt attributes" {
+    const allocator = std.testing.allocator;
+    const html = "<img src=\"test.jpg\" alt=\"Test Image\"><img alt=\"Another\" src=\"x.png\">";
+    const text = try htmlToText(allocator, html);
+    defer allocator.free(text);
+    try std.testing.expectEqualStrings("[Test Image][Another]", text);
+}
+
+test "htmlToText - img without alt" {
+    const allocator = std.testing.allocator;
+    const html = "<img src=\"test.jpg\">";
+    const text = try htmlToText(allocator, html);
+    defer allocator.free(text);
+    try std.testing.expectEqualStrings("", text);
 }

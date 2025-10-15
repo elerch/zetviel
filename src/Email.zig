@@ -322,14 +322,22 @@ pub const Message = struct {
             , .{text_content.?});
         }
 
+        var final_text = text_content orelse try allocator.dupe(u8, "no text or html versions available");
+
+        // If text is empty (e.g., HTML with only images without alt tags), provide fallback
+        if (final_text.len == 0) {
+            allocator.free(final_text);
+            final_text = try allocator.dupe(u8, "Message contains only image data without alt tags");
+        }
+
         return .{
-            .text = text_content orelse "no text or html versions available",
-            .html = html_content orelse
+            .text = final_text,
+            .html = html_content orelse try allocator.dupe(u8,
                 \\<html>
                 \\<head><title>No text or HTML version available</title></head>
                 \\<body>No text or HTML versions available</body>
                 \\</html>
-            ,
+            ),
         };
     }
 
