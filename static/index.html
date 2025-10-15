@@ -180,6 +180,13 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') search();
     });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement.id !== 'search') {
+            e.preventDefault();
+            document.getElementById('search').focus();
+        }
+    });
 });
 
 window.addEventListener('popstate', (e) => {
