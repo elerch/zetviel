@@ -1,0 +1,9 @@
+[tools]
+zig = "0.14.1"
+zls = "0.14.0"
+
+[hooks]
+enter = 'echo use "nix develop" if you want to build'
+
+[settings]
+experimental = true
