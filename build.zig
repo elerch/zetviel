@@ -41,12 +41,17 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const git_rev = b.run(&.{ "git", "describe", "--always", "--dirty=*" });
+    const options = b.addOptions();
+    options.addOption([]const u8, "git_revision", git_rev);
+
     const exe_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     exe_module.addImport("httpz", httpz.module("httpz"));
+    exe_module.addImport("build_options", options.createModule());
 
     const exe = b.addExecutable(.{
         .name = "zetviel",

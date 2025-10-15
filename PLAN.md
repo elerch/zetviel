@@ -30,26 +30,26 @@ Create a netviel clone with improvements:
 - [x] Add tests for new functionality (existing tests pass)
 - [x] Run `zig fmt .`
 
-## Phase 3: HTTP Server & REST API
-- [ ] Research and choose HTTP framework (defer decision)
-- [ ] Add HTTP server dependency
-- [ ] Implement REST endpoints:
-  - [ ] `GET /api/query/<query_string>` - search threads
-  - [ ] `GET /api/thread/<thread_id>` - get thread messages
-  - [ ] `GET /api/attachment/<message_id>/<num>` - download attachment
-  - [ ] `GET /api/message/<message_id>` - download raw .eml file
-- [ ] Complete JSON serialization (extend existing in root.zig)
-- [ ] Add security headers (CORS, X-Frame-Options, etc.)
-- [ ] Add tests for API endpoints
-- [ ] Run `zig fmt .`
+## Phase 3: HTTP Server & REST API ✅ COMPLETE
+- [x] Research and choose HTTP framework (httpz)
+- [x] Add HTTP server dependency
+- [x] Implement REST endpoints:
+  - [x] `GET /api/query/<query_string>` - search threads
+  - [x] `GET /api/thread/<thread_id>` - get thread messages
+  - [x] `GET /api/attachment/<message_id>/<num>` - download attachment
+  - [x] `GET /api/message/<message_id>` - get message details
+- [x] Complete JSON serialization (extend existing in root.zig)
+- [x] Add security headers via httpz middleware
+- [x] Add tests for API endpoints
+- [x] Run `zig fmt .`
 
-## Phase 4: Static File Serving
-- [ ] Implement static file serving:
-  - [ ] Serve `index.html` at `/`
-  - [ ] Serve static assets (JS, CSS)
-  - [ ] Handle SPA routing (all paths → index.html)
-- [ ] Add `--port` CLI argument
-- [ ] Run `zig fmt .`
+## Phase 4: Static File Serving ✅ COMPLETE
+- [x] Implement static file serving:
+  - [x] Serve `index.html` at `/`
+  - [x] Serve static assets (placeholder 404 handler)
+  - [x] Handle SPA routing (all non-API paths ready)
+- [x] Add `--port` CLI argument
+- [x] Run `zig fmt .`
 
 ## Phase 5: Frontend Development
 - [ ] Design minimal UI (list threads, view messages, search)

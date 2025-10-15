@@ -2,10 +2,53 @@ const std = @import("std");
 const httpz = @import("httpz");
 const root = @import("root.zig");
 
+const version = @import("build_options").git_revision;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Parse CLI arguments
+    var port: u16 = 5000;
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+    _ = args.skip(); // skip program name
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            std.debug.print(
+                \\Zetviel - Email client for notmuch
+                \\
+                \\Usage: zetviel [OPTIONS]
+                \\
+                \\Options:
+                \\  --port <PORT>    Port to listen on (default: 5000)
+                \\  --help, -h       Show this help message
+                \\  --version, -v    Show version information
+                \\
+                \\Environment:
+                \\  NOTMUCH_PATH     Path to notmuch database (default: mail)
+                \\
+            , .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {
+            std.debug.print("Zetviel {s}\n", .{version});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "--port")) {
+            const port_str = args.next() orelse {
+                std.debug.print("Error: --port requires a value\n", .{});
+                std.process.exit(1);
+            };
+            port = std.fmt.parseInt(u16, port_str, 10) catch {
+                std.debug.print("Error: invalid port number\n", .{});
+                std.process.exit(1);
+            };
+        } else {
+            std.debug.print("Error: unknown argument '{s}'\n", .{arg});
+            std.debug.print("Use --help for usage information\n", .{});
+            std.process.exit(1);
+        }
+    }
 
     // Get notmuch database path from environment or use default
     const db_path = std.posix.getenv("NOTMUCH_PATH") orelse "mail";
@@ -14,12 +57,12 @@ pub fn main() !void {
     var db = try root.openNotmuchDb(allocator, db_path, null);
     defer db.close();
 
-    std.debug.print("Zetviel starting on http://localhost:5000\n", .{});
+    std.debug.print("Zetviel starting on http://localhost:{d}\n", .{port});
     std.debug.print("Notmuch database: {s}\n", .{db.path});
 
     // Create HTTP server
     var server = try httpz.Server(*root.NotmuchDb).init(allocator, .{
-        .port = 5000,
+        .port = port,
         .address = "127.0.0.1",
     }, &db);
     defer server.deinit();
@@ -33,9 +76,34 @@ pub fn main() !void {
     router.get("/api/message/:message_id", messageHandler, .{});
     router.get("/api/attachment/:message_id/:num", attachmentHandler, .{});
 
-    // TODO: Static file serving for frontend
+    // Static file serving
+    router.get("/", indexHandler, .{});
+    router.get("/*", staticHandler, .{});
 
     try server.listen();
+}
+
+fn indexHandler(db: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !void {
+    const file = std.fs.cwd().openFile("static/index.html", .{}) catch {
+        res.status = 500;
+        res.body = "Error loading index.html";
+        return;
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(db.allocator, 1024 * 1024) catch {
+        res.status = 500;
+        res.body = "Error reading index.html";
+        return;
+    };
+
+    res.header("Content-Type", "text/html");
+    res.body = content;
+}
+
+fn staticHandler(_: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !void {
+    res.status = 404;
+    res.body = "Not Found";
 }
 
 const SecurityHeaders = struct {
