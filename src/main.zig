@@ -101,9 +101,39 @@ fn indexHandler(db: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !v
     res.body = content;
 }
 
-fn staticHandler(_: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !void {
-    res.status = 404;
-    res.body = "Not Found";
+fn staticHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) !void {
+    const path = req.url.path;
+
+    const file_path = if (std.mem.eql(u8, path, "/style.css"))
+        "static/style.css"
+    else if (std.mem.eql(u8, path, "/app.js"))
+        "static/app.js"
+    else {
+        res.status = 404;
+        res.body = "Not Found";
+        return;
+    };
+
+    const file = std.fs.cwd().openFile(file_path, .{}) catch {
+        res.status = 404;
+        res.body = "Not Found";
+        return;
+    };
+    defer file.close();
+
+    const content = file.readToEndAlloc(db.allocator, 1024 * 1024) catch {
+        res.status = 500;
+        res.body = "Error reading file";
+        return;
+    };
+
+    if (std.mem.endsWith(u8, file_path, ".css")) {
+        res.header("Content-Type", "text/css");
+    } else if (std.mem.endsWith(u8, file_path, ".js")) {
+        res.header("Content-Type", "application/javascript");
+    }
+
+    res.body = content;
 }
 
 const SecurityHeaders = struct {
@@ -118,12 +148,17 @@ const SecurityHeaders = struct {
 };
 
 fn queryHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) !void {
-    const query = req.url.path[11..]; // Skip "/api/query/"
-    if (query.len == 0) {
+    const encoded_query = req.url.path[11..]; // Skip "/api/query/"
+    if (encoded_query.len == 0) {
         res.status = 400;
         try res.json(.{ .@"error" = "Query parameter required" }, .{});
         return;
     }
+
+    // URL decode the query
+    const query_buf = try db.allocator.dupe(u8, encoded_query);
+    defer db.allocator.free(query_buf);
+    const query = std.Uri.percentDecodeInPlace(query_buf);
 
     var threads = db.search(query) catch |err| {
         res.status = 500;
