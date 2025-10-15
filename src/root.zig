@@ -45,15 +45,6 @@ pub const Thread = struct {
             try jws.write(m.getHeader("date") catch return error.WriteFailed);
             try jws.objectField("subject");
             try jws.write(m.getHeader("subject") catch return error.WriteFailed);
-            // content, content-type, and attachments are all based on the file itself
-            // TODO: init shouldn't fail
-            // var message = try Message.init(self.allocator, m.getFilename());
-            // defer message.deinit();
-            // try message.load();
-            // const content_type = try message.getContentType();
-            // try jws.objectField("content-type");
-            // try jws.write(content_type);
-
             try jws.objectField("message_id");
             try jws.write(m.getMessageId());
             try jws.endObject();
@@ -198,6 +189,63 @@ pub const NotmuchDb = struct {
         }
         return error.ThreadNotFound;
     }
+
+    pub const MessageDetail = struct {
+        from: ?[]const u8,
+        to: ?[]const u8,
+        cc: ?[]const u8,
+        bcc: ?[]const u8,
+        date: ?[]const u8,
+        subject: ?[]const u8,
+        content: []const u8,
+        content_type: []const u8,
+        attachments: []Email.Message.AttachmentInfo,
+        message_id: []const u8,
+
+        pub fn deinit(self: MessageDetail, allocator: std.mem.Allocator) void {
+            allocator.free(self.content);
+            for (self.attachments) |att| {
+                allocator.free(att.filename);
+                allocator.free(att.content_type);
+            }
+            allocator.free(self.attachments);
+        }
+    };
+
+    pub fn getMessage(self: *NotmuchDb, message_id: []const u8) !MessageDetail {
+        var query_buf: [1024:0]u8 = undefined;
+        const query_z = try std.fmt.bufPrintZ(&query_buf, "mid:{s}", .{message_id});
+        var thread_iter = try self.db.searchThreads(query_z);
+        defer thread_iter.deinit();
+
+        const thread = thread_iter.next() orelse return error.MessageNotFound;
+        defer thread.deinit();
+
+        var msg_iter = try thread.getMessages();
+        const notmuch_msg = msg_iter.next() orelse return error.MessageNotFound;
+
+        const filename_z = try self.allocator.dupeZ(u8, notmuch_msg.getFilename());
+        defer self.allocator.free(filename_z);
+
+        const email_msg = try self.email.openMessage(filename_z);
+        defer email_msg.deinit();
+
+        const content_info = try email_msg.getContent(self.allocator);
+        const attachments = try email_msg.getAttachments(self.allocator);
+
+        return .{
+            .from = notmuch_msg.getHeader("from") catch null,
+            .to = notmuch_msg.getHeader("to") catch null,
+            .cc = notmuch_msg.getHeader("cc") catch null,
+            .bcc = notmuch_msg.getHeader("bcc") catch null,
+            .date = notmuch_msg.getHeader("date") catch null,
+            .subject = notmuch_msg.getHeader("subject") catch null,
+            .content = content_info.content,
+            .content_type = content_info.content_type,
+            .attachments = attachments,
+            .message_id = notmuch_msg.getMessageId(),
+        };
+    }
 };
 
 /// Opens a notmuch database at the specified path
@@ -305,4 +353,28 @@ test "can stringify specific threads" {
         \\  }
         \\]
     , actual);
+}
+
+test "can get message details with content" {
+    const allocator = std.testing.allocator;
+    var db = try openNotmuchDb(allocator, "mail", null);
+    defer db.close();
+
+    // Get a message by its ID
+    const message_id = "8afeb74dca321817e44e07ac4a2e040962e86e@youpharm.co";
+    const msg_detail = try db.getMessage(message_id);
+    defer msg_detail.deinit(allocator);
+
+    // Verify headers
+    try std.testing.expect(msg_detail.from != null);
+    try std.testing.expect(msg_detail.subject != null);
+
+    // Verify content was extracted
+    try std.testing.expect(msg_detail.content.len > 0);
+    try std.testing.expectEqualStrings("text/html", msg_detail.content_type);
+
+    // This message has no attachments
+    try std.testing.expectEqual(@as(usize, 0), msg_detail.attachments.len);
+
+    // TODO: Add test with attachment once we have a sample email with attachments
 }

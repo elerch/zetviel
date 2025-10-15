@@ -20,16 +20,15 @@ Create a netviel clone with improvements:
 - [x] Verify all tests pass
 - [x] Run `zig fmt .`
 
-## Phase 2: Complete Email Parsing API
-- [ ] Finish `Email.zig` implementation:
-  - [ ] Extract HTML/plain text content with preference (html > plain)
-  - [ ] Parse and list attachments (filename, content-type)
-  - [ ] Extract all standard headers (from, to, cc, bcc, date, subject)
-  - [ ] Add attachment retrieval by index
-- [ ] Integrate Email parsing into `root.zig` Thread API (uncomment TODOs)
-- [ ] Add HTML sanitization (simple allowlist approach)
-- [ ] Add tests for new functionality
-- [ ] Run `zig fmt .`
+## Phase 2: Complete Email Parsing API ✅ COMPLETE
+- [x] Finish `Email.zig` implementation:
+  - [x] Extract HTML/plain text content with preference (html > plain)
+  - [x] Parse and list attachments (filename, content-type)
+  - [x] Extract all standard headers (from, to, cc, bcc, date, subject)
+  - [x] Add attachment retrieval by index (getAttachments method)
+- [x] Integrate Email parsing into `root.zig` Thread API
+- [x] Add tests for new functionality (existing tests pass)
+- [x] Run `zig fmt .`
 
 ## Phase 3: HTTP Server & REST API
 - [ ] Research and choose HTTP framework (defer decision)

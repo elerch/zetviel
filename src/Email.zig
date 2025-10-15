@@ -140,7 +140,7 @@ pub const Message = struct {
             if (std.mem.eql(u8, std.mem.span(part_mime_type), "text/html")) {
                 // Try to get the text content
                 if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_text_part_get_type()) != 0) {
-                    const text_part = @as(*gmime.GMimeTextPart, @ptrCast(part));
+                    const text_part: *gmime.GMimeTextPart = @ptrCast(part);
                     const text = gmime.g_mime_text_part_get_text(text_part);
                     if (text != null) {
                         defer gmime.g_free(text);
@@ -157,7 +157,7 @@ pub const Message = struct {
             if (part == null) continue;
 
             if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
-                const nested_multipart = @as(*gmime.GMimeMultipart, @ptrCast(part));
+                const nested_multipart: *gmime.GMimeMultipart = @ptrCast(part);
                 if (try findHtmlInMultipart(nested_multipart, allocator)) |content|
                     return content;
             }
@@ -174,7 +174,7 @@ pub const Message = struct {
 
         // Check if it's a multipart message
         if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_multipart_get_type()) != 0) {
-            const multipart = @as(*gmime.GMimeMultipart, @ptrCast(body));
+            const multipart: *gmime.GMimeMultipart = @ptrCast(body);
 
             // Try to find HTML content in the multipart
             if (try findHtmlInMultipart(multipart, allocator)) |html_content| {
@@ -185,7 +185,7 @@ pub const Message = struct {
 
         // If it's not multipart or we didn't find HTML, check if it's a single text part
         if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_text_part_get_type()) != 0) {
-            const text_part = @as(*gmime.GMimeTextPart, @ptrCast(body));
+            const text_part: *gmime.GMimeTextPart = @ptrCast(body);
             const text = gmime.g_mime_text_part_get_text(text_part);
             if (text != null) {
                 defer gmime.g_free(text);
@@ -200,6 +200,106 @@ pub const Message = struct {
 
         defer gmime.g_free(body_string);
         return try allocator.dupe(u8, std.mem.span(body_string));
+    }
+
+    pub fn getContent(self: Message, allocator: std.mem.Allocator) !struct { content: []const u8, content_type: []const u8 } {
+        const body = gmime.g_mime_message_get_body(self.message);
+        if (body == null) return error.NoMessageBody;
+
+        // Check if it's a multipart message
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_multipart_get_type()) != 0) {
+            const multipart: *gmime.GMimeMultipart = @ptrCast(body);
+            if (try findHtmlInMultipart(multipart, allocator)) |html_content| {
+                return .{ .content = html_content, .content_type = "text/html" };
+            }
+        }
+
+        // Check if it's a single text part
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(body)), gmime.g_mime_text_part_get_type()) != 0) {
+            const text_part: *gmime.GMimeTextPart = @ptrCast(body);
+            const text = gmime.g_mime_text_part_get_text(text_part);
+            if (text != null) {
+                defer gmime.g_free(text);
+                const content = try allocator.dupe(u8, std.mem.span(text));
+                const content_type_obj = gmime.g_mime_object_get_content_type(body);
+                const mime_type = if (content_type_obj != null)
+                    gmime.g_mime_content_type_get_mime_type(content_type_obj)
+                else
+                    null;
+                const ct = if (mime_type != null) std.mem.span(mime_type) else "text/plain";
+                return .{ .content = content, .content_type = ct };
+            }
+        }
+
+        return error.NoTextContent;
+    }
+
+    pub fn getHeader(self: Message, name: []const u8) ?[]const u8 {
+        const name_z = std.mem.sliceTo(name, 0);
+        const header = gmime.g_mime_message_get_header(self.message, name_z.ptr);
+        if (header == null) return null;
+        return std.mem.span(header);
+    }
+
+    pub const AttachmentInfo = struct {
+        filename: []const u8,
+        content_type: []const u8,
+    };
+
+    pub fn getAttachments(self: Message, allocator: std.mem.Allocator) ![]AttachmentInfo {
+        var list = std.ArrayList(AttachmentInfo){};
+        defer list.deinit(allocator);
+
+        // Get the MIME part from the message (not just the body)
+        const mime_part = gmime.g_mime_message_get_mime_part(self.message);
+        if (mime_part == null) return try allocator.dupe(AttachmentInfo, &.{});
+
+        try collectAttachments(mime_part, &list, allocator);
+        return list.toOwnedSlice(allocator);
+    }
+
+    fn collectAttachments(part: *gmime.GMimeObject, list: *std.ArrayList(AttachmentInfo), allocator: std.mem.Allocator) !void {
+        // Check if this is a multipart
+        if (gmime.g_type_check_instance_is_a(@as(*gmime.GTypeInstance, @ptrCast(part)), gmime.g_mime_multipart_get_type()) != 0) {
+            const multipart: *gmime.GMimeMultipart = @ptrCast(part);
+            const count_i = gmime.g_mime_multipart_get_count(multipart);
+            if (count_i == -1) return;
+            const count: usize = @intCast(count_i);
+
+            for (0..count) |i| {
+                const subpart = gmime.g_mime_multipart_get_part(multipart, @intCast(i));
+                if (subpart != null) {
+                    try collectAttachments(subpart, list, allocator);
+                }
+            }
+            return;
+        }
+
+        // Check if this part is an attachment
+        const disposition = gmime.g_mime_object_get_content_disposition(part);
+        if (disposition != null) {
+            const disp_str = gmime.g_mime_content_disposition_get_disposition(disposition);
+            if (disp_str != null and (std.mem.eql(u8, std.mem.span(disp_str), "attachment") or
+                std.mem.eql(u8, std.mem.span(disp_str), "inline")))
+            {
+                const filename_c = gmime.g_mime_part_get_filename(@as(*gmime.GMimePart, @ptrCast(part)));
+                if (filename_c != null) {
+                    const content_type_obj = gmime.g_mime_object_get_content_type(part);
+                    const mime_type = if (content_type_obj != null)
+                        gmime.g_mime_content_type_get_mime_type(content_type_obj)
+                    else
+                        null;
+
+                    try list.append(allocator, .{
+                        .filename = try allocator.dupe(u8, std.mem.span(filename_c)),
+                        .content_type = if (mime_type != null)
+                            try allocator.dupe(u8, std.mem.span(mime_type))
+                        else
+                            try allocator.dupe(u8, "application/octet-stream"),
+                    });
+                }
+            }
+        }
     }
 };
 
@@ -246,4 +346,32 @@ test "can get body from multipart/alternative html preferred" {
         \\</head>
         \\<body><a href="https://unmaskfauci.com/assets/images/chw.php"><img src="https://imgpx.com/dfE6oYsvHoYw.png"></a> <div><img width=1 height=1 alt="" src="https://vnevent.net/wp-content/plugins/wp-automatic/awe.php?QFYiTaVCm0ogM30sC5RNRb%2FKLO0%2FqO3iN9A89RgPbrGjPGsdVierqrtB7w8mnIqJugBVA5TZVG%2F6MFLMOrK9z4D6vgFBDRgH88%2FpEmohBbpaSFf4wx1l9S4LGJd87EK6"></div></body></html>
     , std.mem.trimRight(u8, body, "\r\n"));
+}
+
+test "can parse attachments" {
+    var engine = Self.init();
+    defer engine.deinit();
+    const allocator = std.testing.allocator;
+
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
+    const attachment_path = try std.fs.path.joinZ(allocator, &[_][]const u8{ cwd, "mail", "Inbox", "cur", "attachmentmcattachface.msg" });
+    defer allocator.free(attachment_path);
+
+    const msg = try engine.openMessage(attachment_path);
+    defer msg.deinit();
+
+    const attachments = try msg.getAttachments(allocator);
+    defer {
+        for (attachments) |att| {
+            allocator.free(att.filename);
+            allocator.free(att.content_type);
+        }
+        allocator.free(attachments);
+    }
+
+    // Should have one attachment
+    try std.testing.expectEqual(@as(usize, 1), attachments.len);
+    try std.testing.expectEqualStrings("a.txt", attachments[0].filename);
+    try std.testing.expectEqualStrings("text/plain", attachments[0].content_type);
 }
