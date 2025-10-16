@@ -28,8 +28,10 @@ pub fn openMessage(self: *Self, filename: [:0]const u8) !Message {
     // TODO: remove the :0
     self.gmimeInit();
     // Open the file as a GMime stream
-    const stream = gmime.g_mime_stream_fs_open(filename.ptr, gmime.O_RDONLY, 0o0644, null) orelse
+    const stream = gmime.g_mime_stream_fs_open(filename.ptr, gmime.O_RDONLY, 0o0644, null) orelse {
+        std.log.err("Failed to open message file: {s}", .{filename});
         return error.FileOpenFailed;
+    };
     defer gmime.g_object_unref(stream);
 
     // Create a parser for the stream
