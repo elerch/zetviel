@@ -4,11 +4,24 @@ const root = @import("root.zig");
 
 const version = @import("build_options").git_revision;
 
-pub fn main() !void {
+pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // SAFETY: buffer to be used by writer
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_f = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_f.interface;
+    // SAFETY: buffer to be used by writer
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_f = std.fs.File.stdout().writer(&stderr_buffer);
+    const stderr = &stderr_f.interface;
+
+    errdefer stdout.flush() catch @panic("could not flush stdout");
+    errdefer stderr.flush() catch @panic("could not flush stdout");
+    defer stdout.flush() catch @panic("could not flush stdout");
+    defer stderr.flush() catch @panic("could not flush stdout");
     // Parse CLI arguments
     var port: u16 = 5000;
     var args = try std.process.argsWithAllocator(allocator);
@@ -16,7 +29,7 @@ pub fn main() !void {
     _ = args.skip(); // skip program name
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            std.debug.print(
+            try stdout.writeAll(
                 \\Zetviel - Email client for notmuch
                 \\
                 \\Usage: zetviel [OPTIONS]
@@ -29,36 +42,41 @@ pub fn main() !void {
                 \\Environment:
                 \\  NOTMUCH_PATH     Path to notmuch database (default: mail)
                 \\
-            , .{});
-            std.process.exit(0);
+            );
+            return 0;
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {
-            std.debug.print("Zetviel {s}\n", .{version});
-            std.process.exit(0);
+            try stdout.print("Zetviel {s}\n", .{version});
+            return 0;
         } else if (std.mem.eql(u8, arg, "--port")) {
             const port_str = args.next() orelse {
-                std.debug.print("Error: --port requires a value\n", .{});
-                std.process.exit(1);
+                try stderr.writeAll("Error: --port requires a value\n");
+                return 1;
             };
             port = std.fmt.parseInt(u16, port_str, 10) catch {
-                std.debug.print("Error: invalid port number\n", .{});
-                std.process.exit(1);
+                try stderr.writeAll("Error: invalid port number\n");
+                return 1;
             };
         } else {
-            std.debug.print("Error: unknown argument '{s}'\n", .{arg});
-            std.debug.print("Use --help for usage information\n", .{});
-            std.process.exit(1);
+            try stderr.print("Error: unknown argument '{s}'\n", .{arg});
+            try stderr.writeAll("Use --help for usage information\n");
+            return 1;
         }
     }
 
     // Get notmuch database path from environment or use default
     const db_path = std.posix.getenv("NOTMUCH_PATH") orelse "mail";
+    try stdout.print("Notmuch database: {s}\n", .{db_path});
 
     // Open notmuch database
-    var db = try root.openNotmuchDb(allocator, db_path, null);
+    var db = try root.openNotmuchDb(
+        allocator,
+        db_path,
+        null,
+    );
     defer db.close();
 
-    std.debug.print("Zetviel starting on http://localhost:{d}\n", .{port});
-    std.debug.print("Notmuch database: {s}\n", .{db.path});
+    try stdout.print("Zetviel starting on http://localhost:{d}\n", .{port});
+    try stdout.flush(); // flush before we listen
 
     // Create HTTP server
     var server = try httpz.Server(*root.NotmuchDb).init(allocator, .{
@@ -81,6 +99,7 @@ pub fn main() !void {
     router.get("/*", staticHandler, .{});
 
     try server.listen();
+    return 0;
 }
 
 fn indexHandler(db: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !void {
