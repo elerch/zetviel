@@ -1,0 +1,6 @@
+.zig-cache/
+zig-out/
+mail/
+*.md
+.mise.toml
+.tool-versions
