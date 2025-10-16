@@ -289,9 +289,13 @@ pub const NotmuchDb = struct {
 ///
 /// Error: Returns error if database cannot be opened or path cannot be resolved
 pub fn openNotmuchDb(allocator: std.mem.Allocator, relative_path: []const u8, email_engine: ?Email) !NotmuchDb {
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
-    const db_path = try std.fs.path.joinZ(allocator, &[_][]const u8{ cwd, relative_path });
+    const db_path = if (std.fs.path.isAbsolute(relative_path))
+        try allocator.dupeZ(u8, relative_path)
+    else blk: {
+        var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
+        break :blk try std.fs.path.joinZ(allocator, &[_][]const u8{ cwd, relative_path });
+    };
     errdefer allocator.free(db_path);
 
     const db = notmuch.Db.open(db_path, null) catch |err| {
