@@ -75,13 +75,13 @@ pub fn main() !u8 {
     );
     defer db.close();
 
-    try stdout.print("Zetviel starting on http://localhost:{d}\n", .{port});
+    try stdout.print("Zetviel starting on http://0.0.0.0:{d}\n", .{port});
     try stdout.flush(); // flush before we listen
 
     // Create HTTP server
     var server = try httpz.Server(*root.NotmuchDb).init(allocator, .{
         .port = port,
-        .address = "127.0.0.1",
+        .address = "0.0.0.0",
     }, &db);
     defer server.deinit();
 
