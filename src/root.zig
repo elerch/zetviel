@@ -292,8 +292,12 @@ pub fn openNotmuchDb(allocator: std.mem.Allocator, relative_path: []const u8, em
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd = try std.fs.cwd().realpath(".", cwd_buf[0..]);
     const db_path = try std.fs.path.joinZ(allocator, &[_][]const u8{ cwd, relative_path });
+    errdefer allocator.free(db_path);
 
-    const db = try notmuch.Db.open(db_path, null);
+    const db = notmuch.Db.open(db_path, null) catch |err| {
+        std.log.err("Could not open {s}", .{db_path});
+        return err;
+    };
 
     const email = email_engine orelse Email.init();
 
