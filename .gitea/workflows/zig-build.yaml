@@ -21,7 +21,7 @@ jobs:
       - name: Run tests
         run: zig build test --summary all
       - name: Notify
-        uses: elerch/action-notify-ntfy@v2.github
+        uses: https://git.lerch.org/lobo/action-notify-ntfy@v2
         if: always() && env.GITEA_ACTIONS == 'true'
         with:
           host: ${{ secrets.NTFY_HOST }}
