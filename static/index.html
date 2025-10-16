@@ -255,12 +255,17 @@ function escapeHtml(text) {
 
 window.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(location.search);
-    const query = params.get('q') || 'tag:inbox';
+    const query = params.get('q');
     document.getElementById('search').value = query;
-    loadThreads(query);
+    if (query !== '') {
+      loadThreads(query);
+    }
 
     document.getElementById('search').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') search();
+        if (e.key === 'Enter') {
+            search();
+            e.target.blur();
+        }
     });
 
     document.addEventListener('keydown', (e) => {
