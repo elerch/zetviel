@@ -135,6 +135,7 @@ pub fn build(b: *std.Build) !void {
 fn configure(compile: *std.Build.Step.Compile, paths: std.zig.system.NativePaths, reload_paths: bool) void {
     compile.linkLibC();
     compile.linkSystemLibrary("notmuch");
+    compile.linkSystemLibrary2("gmime-3.0", .{ .use_pkg_config = .force });
 
     // These are only needed if we are in nix develop shell
     if (!reload_paths) return;
@@ -144,8 +145,6 @@ fn configure(compile: *std.Build.Step.Compile, paths: std.zig.system.NativePaths
         compile.addIncludePath(.{ .cwd_relative = dir });
     for (paths.rpaths.items) |dir|
         compile.addRPath(.{ .cwd_relative = dir });
-
-    compile.linkSystemLibrary2("gmime-3.0", .{ .use_pkg_config = .force });
 }
 
 fn checkNix(b: *std.Build, target_query: *std.Target.Query) !std.zig.system.NativePaths {
