@@ -124,6 +124,7 @@ pub const Db = struct {
         if (nm_query == null) return error.CouldNotCreateQuery;
         const handle = nm_query.?;
         errdefer c.notmuch_query_destroy(handle);
+        // SAFETY: out paramter in notmuch_query_search_threads
         var threads: ?*c.notmuch_threads_t = undefined;
         const status = c.notmuch_query_search_threads(handle, &threads);
         if (status != c.NOTMUCH_STATUS_SUCCESS) return error.CouldNotSearchThreads;
@@ -155,10 +156,13 @@ pub const Db = struct {
     pub const Message = struct {
         message_handle: *c.notmuch_message_t,
 
-        pub fn getHeader(self: Message, header: [:0]const u8) !?[]const u8 {
-            const val = c.notmuch_message_get_header(self.message_handle, header) orelse return error.ErrorGettingHeader; // null is an error
+        pub fn getHeader(self: Message, header: [:0]const u8) ?[]const u8 {
+            const val = c.notmuch_message_get_header(self.message_handle, header) orelse {
+                std.log.err("notmuch returned null for header '{s}' on message {s} (file: {s})", .{ header, self.getMessageId(), self.getFilename() });
+                return null;
+            };
             const ziggy_val = std.mem.span(val);
-            if (ziggy_val.len == 0) return null; // empty string indicates message does not contain the header
+            if (ziggy_val.len == 0) return null;
             return ziggy_val;
         }
         pub fn getMessageId(self: Message) []const u8 {

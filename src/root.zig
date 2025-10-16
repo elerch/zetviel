@@ -35,21 +35,24 @@ pub const Thread = struct {
         //  }
         //]
         try jws.beginArray();
-        var mi = self.thread.getMessages() catch return error.WriteFailed;
+        var mi = self.thread.getMessages() catch |err| {
+            std.log.err("Failed to get messages for thread {s}: {s}", .{ self.thread.getThreadId(), @errorName(err) });
+            return error.WriteFailed;
+        };
         while (mi.next()) |m| {
             try jws.beginObject();
             try jws.objectField("from");
-            try jws.write(m.getHeader("from") catch return error.WriteFailed);
+            try jws.write(m.getHeader("from"));
             try jws.objectField("to");
-            try jws.write(m.getHeader("to") catch return error.WriteFailed);
+            try jws.write(m.getHeader("to"));
             try jws.objectField("cc");
-            try jws.write(m.getHeader("cc") catch return error.WriteFailed);
+            try jws.write(m.getHeader("cc"));
             try jws.objectField("bcc");
-            try jws.write(m.getHeader("bcc") catch return error.WriteFailed);
+            try jws.write(m.getHeader("bcc"));
             try jws.objectField("date");
-            try jws.write(m.getHeader("date") catch return error.WriteFailed);
+            try jws.write(m.getHeader("date"));
             try jws.objectField("subject");
-            try jws.write(m.getHeader("subject") catch return error.WriteFailed);
+            try jws.write(m.getHeader("subject"));
             try jws.objectField("message_id");
             try jws.write(m.getMessageId());
             try jws.endObject();
@@ -250,12 +253,12 @@ pub const NotmuchDb = struct {
         const content_info = try email_msg.getTextAndHtmlBodyVersions(self.allocator);
         const attachments = try email_msg.getAttachments(self.allocator);
 
-        const from = if (notmuch_msg.getHeader("from") catch null) |h| try self.allocator.dupe(u8, h) else null;
-        const to = if (notmuch_msg.getHeader("to") catch null) |h| try self.allocator.dupe(u8, h) else null;
-        const cc = if (notmuch_msg.getHeader("cc") catch null) |h| try self.allocator.dupe(u8, h) else null;
-        const bcc = if (notmuch_msg.getHeader("bcc") catch null) |h| try self.allocator.dupe(u8, h) else null;
-        const date = if (notmuch_msg.getHeader("date") catch null) |h| try self.allocator.dupe(u8, h) else null;
-        const subject = if (notmuch_msg.getHeader("subject") catch null) |h| try self.allocator.dupe(u8, h) else null;
+        const from = if (notmuch_msg.getHeader("from")) |h| try self.allocator.dupe(u8, h) else null;
+        const to = if (notmuch_msg.getHeader("to")) |h| try self.allocator.dupe(u8, h) else null;
+        const cc = if (notmuch_msg.getHeader("cc")) |h| try self.allocator.dupe(u8, h) else null;
+        const bcc = if (notmuch_msg.getHeader("bcc")) |h| try self.allocator.dupe(u8, h) else null;
+        const date = if (notmuch_msg.getHeader("date")) |h| try self.allocator.dupe(u8, h) else null;
+        const subject = if (notmuch_msg.getHeader("subject")) |h| try self.allocator.dupe(u8, h) else null;
         const msg_id = try self.allocator.dupe(u8, notmuch_msg.getMessageId());
 
         return .{
