@@ -1,6 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const root = @import("root.zig");
+const auth = @import("auth.zig");
 
 const version = @import("build_options").git_revision;
 
@@ -67,6 +68,25 @@ pub fn main() !u8 {
     const db_path = std.posix.getenv("NOTMUCH_PATH") orelse "mail";
     try stdout.print("Notmuch database: {s}\n", .{db_path});
 
+    // Load credentials
+    const creds_path = std.posix.getenv("ZETVIEL_CREDS") orelse ".zetviel_creds";
+    const creds = auth.loadCredentials(allocator, creds_path) catch |err| {
+        if (err == error.FileNotFound) {
+            try stderr.print("Warning: No credentials file found at {s}\n", .{creds_path});
+            try stderr.writeAll("API routes will be unprotected. Create a credentials file with:\n");
+            try stderr.writeAll("  echo 'username' > .zetviel_creds\n");
+            try stderr.writeAll("  echo 'password' >> .zetviel_creds\n");
+        } else {
+            try stderr.print("Error loading credentials: {s}\n", .{@errorName(err)});
+            return 1;
+        }
+        return 1;
+    };
+    defer {
+        allocator.free(creds.username);
+        allocator.free(creds.password);
+    }
+
     // Open notmuch database
     var db = try root.openNotmuchDb(
         allocator,
@@ -85,18 +105,26 @@ pub fn main() !u8 {
     }, &db);
     defer server.deinit();
 
-    // API routes
+    // Security headers middleware
     var security_headers = SecurityHeaders{};
     const security_middleware = httpz.Middleware(*root.NotmuchDb).init(&security_headers);
-    var router = try server.router(.{ .middlewares = &.{security_middleware} });
-    router.get("/api/query/*", queryHandler, .{});
-    router.get("/api/thread/:thread_id", threadHandler, .{});
-    router.get("/api/message/:message_id", messageHandler, .{});
-    router.get("/api/attachment/:message_id/:num", attachmentHandler, .{});
 
-    // Static file serving
-    router.get("/", indexHandler, .{});
-    router.get("/*", staticHandler, .{});
+    // Auth middleware for API routes
+    var basic_auth = auth.BasicAuth{ .creds = creds };
+    const auth_middleware = httpz.Middleware(*root.NotmuchDb).init(&basic_auth);
+
+    // API routes with auth
+    var api_router = try server.router(.{ .middlewares = &.{ security_middleware, auth_middleware } });
+    api_router.get("/api/query/*", queryHandler, .{});
+    api_router.get("/api/thread/:thread_id", threadHandler, .{});
+    api_router.get("/api/message/:message_id", messageHandler, .{});
+    api_router.get("/api/attachment/:message_id/:num", attachmentHandler, .{});
+    api_router.get("/api/auth/status", authStatusHandler, .{});
+
+    // Static file serving (no auth)
+    var static_router = try server.router(.{ .middlewares = &.{security_middleware} });
+    static_router.get("/", indexHandler, .{});
+    static_router.get("/*", staticHandler, .{});
 
     try server.listen();
     return 0;
@@ -117,6 +145,7 @@ fn indexHandler(db: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !v
     };
 
     res.header("Content-Type", "text/html");
+    res.header("Cache-Control", "no-cache, no-store, must-revalidate");
     res.body = content;
 }
 
@@ -262,6 +291,10 @@ fn attachmentHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Respo
     // TODO: Actually retrieve and send attachment content
     // For now, just send metadata
     try res.json(.{ .filename = att.filename, .content_type = att.content_type }, .{});
+}
+
+fn authStatusHandler(_: *root.NotmuchDb, _: *httpz.Request, res: *httpz.Response) !void {
+    try res.json(.{ .authenticated = true }, .{});
 }
 
 test "queryHandler with valid query" {

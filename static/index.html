@@ -42,6 +42,12 @@ button:disabled { background: #444; cursor: not-allowed; }
 .help-overlay code { background: #2a2a2a; padding: 0.2rem 0.4rem; border-radius: 3px; color: #4ec9b0; }
 .help-overlay ul { list-style: none; margin-top: 0.5rem; }
 .help-overlay li { margin: 0.5rem 0; }
+.login-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; align-items: center; justify-content: center; }
+.login-overlay.visible { display: flex; }
+.login-box { background: #252525; border: 1px solid #444; border-radius: 8px; padding: 2rem; width: 300px; }
+.login-box h2 { margin-bottom: 1rem; }
+.login-box input { width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #e0e0e0; }
+.login-box button { width: 100%; }
     </style>
 </head>
 <body>
@@ -51,11 +57,14 @@ button:disabled { background: #444; cursor: not-allowed; }
                 <h1>Zetviel</h1>
                 <span class="help-icon" onclick="toggleHelp()" title="Help (?)">?</span>
             </div>
-            <div id="status" class="status-ok">●</div>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <span id="auth-status" style="font-size: 0.9rem; color: #999;"></span>
+                <div id="status" class="status-ok">●</div>
+            </div>
         </header>
 
         <div class="search-bar">
-            <input type="text" id="search" placeholder="Search (e.g., tag:inbox)" value="tag:inbox">
+            <input type="text" id="search" placeholder="Search (e.g., tag:inbox)">
             <button onclick="search()">Search</button>
         </div>
 
@@ -89,6 +98,15 @@ button:disabled { background: #444; cursor: not-allowed; }
                 <li><code>?</code> - Toggle this help</li>
             </ul>
         </div>
+
+        <div id="login-overlay" class="login-overlay">
+            <div class="login-box">
+                <h2>Login Required</h2>
+                <input type="text" id="login-username" placeholder="Username" autocomplete="username">
+                <input type="password" id="login-password" placeholder="Password" autocomplete="current-password">
+                <button onclick="submitLogin()">Login</button>
+            </div>
+        </div>
     </div>
     <script>
 let currentQuery = 'tag:inbox';
@@ -96,11 +114,75 @@ let isLoading = false;
 let currentThreadIndex = -1;
 let threads = [];
 let currentMessageId = null;
+let authCredentials = null;
 
 async function api(endpoint) {
-    const res = await fetch(`/api/${endpoint}`);
+    const headers = {};
+    if (authCredentials) {
+        headers['Authorization'] = `Basic ${btoa(`${authCredentials.username}:${authCredentials.password}`)}`;
+    }
+    const res = await fetch(`/api/${endpoint}`, { headers });
+    if (res.status === 401) {
+        const success = await promptLogin();
+        if (!success) throw new Error('Authentication required');
+        headers['Authorization'] = `Basic ${btoa(`${authCredentials.username}:${authCredentials.password}`)}`;
+        const retryRes = await fetch(`/api/${endpoint}`, { headers });
+        if (!retryRes.ok) throw new Error(`API error: ${retryRes.status}`);
+        return retryRes.json();
+    }
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
+}
+
+async function checkAuthStatus() {
+    try {
+        await api('auth/status');
+        document.getElementById('auth-status').textContent = 'Logged in';
+        document.getElementById('auth-status').style.color = '#0f0';
+        return true;
+    } catch (e) {
+        document.getElementById('auth-status').textContent = '';
+        return false;
+    }
+}
+
+let loginResolve = null;
+
+function promptLogin() {
+    return new Promise((resolve) => {
+        loginResolve = resolve;
+        document.getElementById('login-overlay').classList.add('visible');
+        document.getElementById('login-username').value = '';
+        document.getElementById('login-password').value = '';
+        document.getElementById('login-username').focus();
+    });
+}
+
+async function submitLogin() {
+    const username = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+
+    if (!username || !password) return;
+
+    authCredentials = { username, password };
+
+    try {
+        await fetch('/api/auth/status', {
+            headers: { 'Authorization': `Basic ${btoa(`${username}:${password}`)}` }
+        }).then(r => {
+            if (!r.ok) throw new Error('Invalid credentials');
+        });
+
+        sessionStorage.setItem('authCredentials', JSON.stringify(authCredentials));
+        document.getElementById('auth-status').textContent = 'Logged in';
+        document.getElementById('auth-status').style.color = '#0f0';
+        document.getElementById('login-overlay').classList.remove('visible');
+        if (loginResolve) loginResolve(true);
+    } catch (e) {
+        authCredentials = null;
+        alert('Login failed');
+        if (loginResolve) loginResolve(false);
+    }
 }
 
 function setStatus(state) {
@@ -253,12 +335,22 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+    // Restore credentials from sessionStorage
+    const stored = sessionStorage.getItem('authCredentials');
+    if (stored) {
+        authCredentials = JSON.parse(stored);
+        document.getElementById('auth-status').textContent = 'Logged in';
+        document.getElementById('auth-status').style.color = '#0f0';
+    }
+
     const params = new URLSearchParams(location.search);
     const query = params.get('q');
-    document.getElementById('search').value = query;
-    if (query !== '') {
-      loadThreads(query);
+    if (query) {
+        document.getElementById('search').value = query;
+        if (authCredentials) {
+            loadThreads(query);
+        }
     }
 
     document.getElementById('search').addEventListener('keypress', (e) => {
@@ -270,6 +362,13 @@ window.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('keydown', (e) => {
         if (document.activeElement.id === 'search') return;
+        if (document.getElementById('login-overlay').classList.contains('visible')) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                submitLogin();
+            }
+            return;
+        }
 
         if (e.key === '/') {
             e.preventDefault();
