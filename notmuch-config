@@ -1,0 +1,12 @@
+[database]
+path=/home/lobo/shared/zetviel/mail
+[user]
+name=Test User
+primary_email=test@example.com
+[new]
+tags=unread;inbox;
+ignore=
+[search]
+exclude_tags=deleted;spam;
+[maildir]
+synchronize_flags=true
