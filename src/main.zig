@@ -204,8 +204,7 @@ fn queryHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) 
     }
 
     // URL decode the query
-    const query_buf = try db.allocator.dupe(u8, encoded_query);
-    defer db.allocator.free(query_buf);
+    const query_buf = try req.arena.dupe(u8, encoded_query);
     const query = std.Uri.percentDecodeInPlace(query_buf);
 
     var threads = db.search(query) catch |err| {
@@ -215,7 +214,48 @@ fn queryHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) 
     };
     defer threads.deinit();
 
-    try res.json(threads, .{});
+    // Check Accept header
+    const accept = req.header("accept") orelse "application/json";
+    if (std.mem.startsWith(u8, accept, "text/plain")) {
+        // Parse parameters
+        const has_format = std.mem.indexOf(u8, accept, "format=message-ids") != null;
+        const separator_param = std.mem.indexOf(u8, accept, "separator=");
+        const has_mutt_escape = std.mem.indexOf(u8, accept, "escape=mutt") != null;
+
+        if (!has_format) {
+            res.status = 400;
+            res.body = "Invalid Accept header: text/plain requires format=message-ids";
+            return;
+        }
+
+        // Collect message IDs
+        var msg_ids = std.ArrayList([]const u8){};
+
+        while (try threads.next()) |*thread| {
+            defer thread.deinit();
+            var msg_iter = try thread.thread.getMessages();
+            while (msg_iter.next()) |msg| {
+                const msg_id = msg.getMessageId();
+                if (has_mutt_escape) {
+                    const escaped = try std.mem.replaceOwned(u8, res.arena, msg_id, "+", "\\+");
+                    try msg_ids.append(res.arena, escaped);
+                } else {
+                    try msg_ids.append(res.arena, msg_id);
+                }
+            }
+        }
+
+        // Format output
+        const separator: []const u8 = if (separator_param) |s| accept[s + "separator=".len .. s + "separator=".len + 1] else "\n";
+        const output = try std.mem.join(res.arena, separator, msg_ids.items);
+        res.header("Content-Type", "text/plain");
+        res.body = output;
+    } else if (std.mem.startsWith(u8, accept, "application/json") or std.mem.eql(u8, accept, "*/*")) {
+        try res.json(threads, .{});
+    } else {
+        res.status = 400;
+        res.body = "Invalid Accept header: must be application/json or text/plain; format=message-ids";
+    }
 }
 
 fn threadHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) !void {
