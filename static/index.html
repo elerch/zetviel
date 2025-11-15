@@ -48,6 +48,11 @@ button:disabled { background: #444; cursor: not-allowed; }
 .login-box h2 { margin-bottom: 1rem; }
 .login-box input { width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #e0e0e0; }
 .login-box button { width: 100%; }
+.restart-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 3000; align-items: center; justify-content: center; }
+.restart-overlay.visible { display: flex; }
+.restart-box { background: #252525; border: 1px solid #444; border-radius: 8px; padding: 2rem; text-align: center; }
+.restart-box h2 { margin-bottom: 1rem; color: #ff6b6b; }
+.restart-box p { margin-bottom: 1rem; color: #999; }
     </style>
 </head>
 <body>
@@ -107,6 +112,14 @@ button:disabled { background: #444; cursor: not-allowed; }
                 <button onclick="submitLogin()">Login</button>
             </div>
         </div>
+
+        <div id="restart-overlay" class="restart-overlay">
+            <div class="restart-box">
+                <h2>Server Restarting</h2>
+                <p>The server encountered a fatal error and is restarting...</p>
+                <p id="retry-countdown">Retrying in <span id="retry-seconds">5</span> seconds</p>
+            </div>
+        </div>
     </div>
     <script>
 let currentQuery = 'tag:inbox';
@@ -130,8 +143,30 @@ async function api(endpoint) {
         if (!retryRes.ok) throw new Error(`API error: ${retryRes.status}`);
         return retryRes.json();
     }
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    if (!res.ok) {
+        if (res.status === 503) {
+            const data = await res.json();
+            if (data.fatal) {
+                showRestartOverlay();
+                throw new Error('Fatal server error');
+            }
+        }
+        throw new Error(`API error: ${res.status}`);
+    }
     return res.json();
+}
+
+function showRestartOverlay() {
+    document.getElementById('restart-overlay').classList.add('visible');
+    let seconds = 5;
+    const countdown = setInterval(() => {
+        seconds--;
+        document.getElementById('retry-seconds').textContent = seconds;
+        if (seconds <= 0) {
+            clearInterval(countdown);
+            location.reload();
+        }
+    }, 1000);
 }
 
 async function checkAuthStatus() {

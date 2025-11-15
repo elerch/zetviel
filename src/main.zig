@@ -5,6 +5,12 @@ const auth = @import("auth.zig");
 
 const version = @import("build_options").git_revision;
 
+fn exitAfterDelay() void {
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.log.err("Notmuch search is in unrecoverable state: exiting", .{});
+    std.process.exit(1);
+}
+
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -208,6 +214,13 @@ fn queryHandler(db: *root.NotmuchDb, req: *httpz.Request, res: *httpz.Response) 
     const query = std.Uri.percentDecodeInPlace(query_buf);
 
     var threads = db.search(query) catch |err| {
+        if (err == error.CouldNotSearchThreads) {
+            res.status = 503;
+            try res.json(.{ .@"error" = "CouldNotSearchThreads", .fatal = true }, .{});
+            const exit_thread = std.Thread.spawn(.{}, exitAfterDelay, .{}) catch @panic("could not spawn thread to kill process");
+            exit_thread.detach();
+            return;
+        }
         res.status = 500;
         try res.json(.{ .@"error" = @errorName(err) }, .{});
         return;
