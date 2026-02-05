@@ -12,7 +12,7 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v4
       - name: Setup Zig
-        uses: https://github.com/mlugg/setup-zig@v2.0.5
+        uses: https://codeberg.org/mlugg/setup-zig@v2.2.1
       - name: Install dependencies (gitea)
         if: env.GITEA_ACTIONS == 'true'
         run: apt-get update && apt-get install --no-install-recommends -y libnotmuch-dev libgmime-3.0-dev libglib2.0-dev
